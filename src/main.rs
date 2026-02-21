@@ -20,7 +20,8 @@ static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[derive(clap::Parser, Debug)]
 #[command(author, version, about, long_about = None, flatten_help = true, disable_help_subcommand = true)]
 struct Args {
-	database_path: PathBuf,
+	#[arg(long)]
+	database_dir: PathBuf,
 	#[command(subcommand)]
 	command: Commands,
 }
@@ -28,9 +29,14 @@ struct Args {
 #[derive(Debug, clap::Subcommand)]
 enum Commands {
 	Login {
+		#[arg(long)]
 		homeserver: String,
-		username: String,
-		password: String,
+		#[arg(long)]
+		username: Option<String>,
+		#[arg(long)]
+		password: Option<String>,
+		#[arg(long)]
+		login_token: Option<String>,
 	},
 	Run,
 }
@@ -48,7 +54,7 @@ impl FxSessionData {
 	fn persist(&self) -> anyhow::Result<()> {
 		let fx_session_data = serde_json::to_string(self)?;
 
-		let conn = rusqlite::Connection::open(&ARGS.database_path)?;
+		let conn = rusqlite::Connection::open(&ARGS.database_dir.join("fxsession.sqlite3"))?;
 		conn.execute(
 			"CREATE TABLE IF NOT EXISTS FxSessionData (id INTEGER PRIMARY KEY, settings TEXT NOT NULL);",
 			(),
@@ -69,7 +75,7 @@ impl FxSessionData {
 	}
 
 	fn load() -> anyhow::Result<FxSessionData> {
-		let conn = rusqlite::Connection::open(&ARGS.database_path)?;
+		let conn = rusqlite::Connection::open(&ARGS.database_dir.join("fxsession.sqlite3"))?;
 		let settings = conn.query_one("SELECT settings FROM FxSessionData;", (), |r| {
 			Ok(r.get_ref(0)?.as_str()?.to_owned())
 		})?;
@@ -83,12 +89,15 @@ static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
 		.connect_timeout(Duration::from_secs(10))
 		.read_timeout(Duration::from_secs(120))
 		.timeout(Duration::from_secs(140))
+		/*
 		.user_agent(format!(
 			"{}/{} ({})",
 			env!("CARGO_PKG_NAME"),
 			env!("CARGO_PKG_VERSION"),
 			env!("CARGO_PKG_REPOSITORY")
 		))
+		*/
+		.user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36")
 		.build()
 		.unwrap()
 });
@@ -107,27 +116,49 @@ async fn async_main() -> anyhow::Result<()> {
 			homeserver,
 			username,
 			password,
-		} => login(&homeserver, &username, &password).await,
+			login_token,
+		} => login(&homeserver, &username, &password, &login_token).await,
 		Commands::Run => run().await,
 	}
 }
 
-async fn login(homeserver: &str, username: &str, password: &str) -> anyhow::Result<()> {
-	tokio::fs::remove_file(&ARGS.database_path).await?; // Die, fool.
+async fn login(
+	homeserver: &str,
+	username: &Option<String>,
+	password: &Option<String>,
+	login_token: &Option<String>,
+) -> anyhow::Result<()> {
+	let _ = tokio::fs::remove_dir_all(&ARGS.database_dir).await; // Die, fool.
+	tokio::fs::create_dir_all(&ARGS.database_dir).await?; // Live, fool.
 
 	println!("Connecting to {homeserver}");
 	let matrix_client = matrix_sdk::Client::builder()
-		.homeserver_url(&homeserver)
-		.sqlite_store(&ARGS.database_path, None)
+		.server_name_or_homeserver_url(&homeserver)
+		.sqlite_store(&ARGS.database_dir, None)
 		.build()
 		.await?;
 	let matrix_auth: matrix_sdk::authentication::matrix::MatrixAuth = matrix_client.matrix_auth();
 
-	println!("Attempting to login to @{username}:{homeserver}");
-	let _response = matrix_auth
-		.login_username(&username, &password)
-		.initial_device_display_name(&format!("bot {}", rand::rng().next_u32()))
-		.await?;
+	let login_types = matrix_auth.get_login_types().await?;
+
+	if let Some(username) = username
+		&& let Some(password) = password
+	{
+		println!("Attempting to login to @{username}:{homeserver}");
+		let _response = matrix_auth
+			.login_username(&username, &password)
+			.initial_device_display_name(&format!("Element {}", rand::rng().next_u32()))
+			.await?;
+	} else if let Some(login_token) = login_token {
+		println!("Attempting to login with token {login_token}");
+		let _response = matrix_auth
+			.login_token(&login_token)
+			.initial_device_display_name(&format!("Element {}", rand::rng().next_u32()))
+			.await?;
+	} else {
+		println!("{:?}", login_types);
+		anyhow::bail!("missing username/password or login_token combo!");
+	}
 
 	let matrix_session = matrix_auth.session().context("matrix_auth.session()")?;
 	FxSessionData {
@@ -142,8 +173,8 @@ async fn login(homeserver: &str, username: &str, password: &str) -> anyhow::Resu
 async fn run() -> anyhow::Result<()> {
 	let fx_session_data = FxSessionData::load()?;
 	let matrix_client = matrix_sdk::Client::builder()
-		.homeserver_url(&fx_session_data.homeserver)
-		.sqlite_store(&ARGS.database_path, None)
+		.server_name_or_homeserver_url(&fx_session_data.homeserver)
+		.sqlite_store(&ARGS.database_dir, None)
 		.build()
 		.await?;
 
@@ -161,6 +192,8 @@ async fn run() -> anyhow::Result<()> {
 
 	matrix_client.add_event_handler(on_room_message);
 
+	println!("max_upload_size = {:?}", matrix_client.load_or_fetch_max_upload_size().await?);
+
 	matrix_client.sync(sync_settings).await?;
 
 	Ok(())
@@ -174,6 +207,8 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 	let MessageType::Text(text) = &event.content.msgtype else {
 		return;
 	};
+
+	println!("{:?}", event);
 
 	/*
 	- find twitter/x/fxtwitter/etc urls in body
