@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -196,6 +197,8 @@ async fn run() -> anyhow::Result<()> {
 
 	matrix_client.sync(sync_settings).await?;
 
+	// TODO: setup a nice way to exit so your sqlite dbs close cleanly
+
 	Ok(())
 }
 
@@ -209,6 +212,11 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 	};
 
 	println!("{:?}", event);
+
+	let links: Vec<_> = linkify::LinkFinder::new()
+		.links(&text.body)
+		.filter_map(|l| reqwest::Url::from_str(l.as_str()).ok())
+		.collect();
 
 	/*
 	- find twitter/x/fxtwitter/etc urls in body

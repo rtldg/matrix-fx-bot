@@ -11,6 +11,7 @@ edition = "2024"
 [dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
 clap = { version = "4.5.57", features = ["cargo", "derive", "unicode"] }
+linkify = "0.10.0"
 matrix-sdk = { version = "0.16.0", default-features = false, features = ["e2e-encryption", "bundled-sqlite", "rustls-tls"] }
 mimalloc = { version = "*", features = ["secure"] }
 rand = "0.10.0"
