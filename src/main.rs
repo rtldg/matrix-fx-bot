@@ -72,6 +72,7 @@ enum Commands {
 
 static ARGS: LazyLock<Args> = LazyLock::new(Args::parse);
 static MY_USER_ID: OnceLock<OwnedUserId> = OnceLock::new();
+static SHOULD_DIE: OnceLock<()> = OnceLock::new();
 
 /// We read/write this sucker as JSON to a table in the sqlite database.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -201,6 +202,15 @@ async fn login(
 }
 
 async fn run() -> anyhow::Result<()> {
+	while let Err(e) = run_session_once().await {
+		println!("{e:?}");
+		println!("Restarting in 10s");
+		tokio::time::sleep(Duration::from_secs(10)).await;
+	}
+	Ok(())
+}
+
+async fn run_session_once() -> anyhow::Result<()> {
 	let fx_session_data = FxSessionData::load()?;
 	let matrix_client = matrix_sdk::Client::builder()
 		.server_name_or_homeserver_url(&fx_session_data.homeserver)
@@ -235,7 +245,15 @@ async fn run() -> anyhow::Result<()> {
 
 	println!("max_upload_size = {:?}", matrix_client.load_or_fetch_max_upload_size().await?);
 
-	matrix_client.sync(sync_settings).await?;
+	matrix_client
+		.sync_with_callback(sync_settings, |_| async {
+			if SHOULD_DIE.get().is_some() {
+				matrix_sdk::LoopCtrl::Break
+			} else {
+				matrix_sdk::LoopCtrl::Continue
+			}
+		})
+		.await?;
 
 	// TODO: setup a nice way to exit so your sqlite dbs close cleanly
 
@@ -291,7 +309,9 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 	};
 
 	if text.body == "!die" {
-		// TODO:
+		let _ = SHOULD_DIE.set(());
+		println!("!die");
+		return;
 	}
 
 	//println!("{:?}", event);
