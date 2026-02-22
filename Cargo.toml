@@ -14,6 +14,7 @@ clap = { version = "4.5.57", features = ["cargo", "derive", "unicode"] }
 linkify = "0.10.0"
 matrix-sdk = { version = "0.16.0", default-features = false, features = ["e2e-encryption", "bundled-sqlite", "rustls-tls"] }
 mimalloc = { version = "*", features = ["secure"] }
+mime = "0.3.17"
 rand = "0.10.0"
 reqwest = { version = "*", features = ["gzip", "json", "http2"] }
 rusqlite = "*"

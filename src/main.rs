@@ -1,3 +1,5 @@
+mod types;
+
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -6,18 +8,22 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Parser;
 use matrix_sdk::RoomState;
+use matrix_sdk::attachment::AttachmentConfig;
 use matrix_sdk::authentication::matrix::MatrixSession;
 use matrix_sdk::config::SyncSettings;
 use matrix_sdk::ruma::api::client::filter::FilterDefinition;
 use matrix_sdk::ruma::events::room::message::MessageType;
 use matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent;
+use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
 use rand::Rng;
+use reqwest::Url;
 use serde::Deserialize;
 use serde::Serialize;
 
 const TARGETS: &[&str] = &[
 	"cunnyx.com",
 	"fixupx.com",
+	"fixvx.com",
 	"fxtwitter.com",
 	"hitlerx.com",
 	"twitter.com",
@@ -228,19 +234,103 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 
 	let links: Vec<_> = linkify::LinkFinder::new()
 		.links(&text.body)
-		.filter_map(|l| reqwest::Url::from_str(l.as_str()).ok())
+		.filter_map(|l| Url::from_str(l.as_str()).ok())
 		.filter(|l| l.scheme() == "https" && l.has_host())
 		.filter(|l| TARGETS.contains(&l.host_str().unwrap().to_ascii_lowercase().as_str()))
 		.filter(|l| l.path().contains("/status/"))
 		.collect();
 
 	for link in links {
-		//
+		println!("found {link}");
+		post_tweet(&event, &room, link).await;
+	}
+}
+
+async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Room, mut link: Url) -> anyhow::Result<()> {
+	link.set_host(Some("api.fxtwitter.com")).unwrap();
+	let Ok(response) = HTTP.get(link).send().await else {
+		// TODO:
+		anyhow::bail!("");
+	};
+	let Ok(response) = response.json::<types::FxApiResponse>().await else {
+		// TODO:
+		anyhow::bail!("");
+	};
+	let Some(tweet) = response.tweet else {
+		// TODO:
+		anyhow::bail!("");
+	};
+
+	let textmsg = RoomMessageEventContent::text_plain(format!(
+		"{} (@{})\n{}\n💬{} ♻️{} ❤️{} 👁️{}\n{}",
+		tweet.author.name,
+		tweet.author.screen_name,
+		tweet.text,
+		tweet.replies,
+		tweet.retweets,
+		tweet.likes,
+		tweet.views,
+		tweet.created_at
+	));
+	let Ok(_) = room.send(textmsg).await else {
+		// TODO:
+		anyhow::bail!("");
+	};
+
+	let Some(media) = tweet.media else {
+		// TODO:
+		return Ok(());
+	};
+
+	// keeping this as a vec in case I ever want to upload all images instead of the mosaic
+	let mut to_upload = vec![];
+
+	if let Some(videos) = media.videos {
+		let video = &videos[0];
+		let mut url = video.url.clone();
+		url.set_path(&url.path().replace(".mp4", ".gif"));
+		let filename = url.path_segments().unwrap().last().unwrap().to_string();
+		if video.r#type == "gif" {
+			url.set_host(Some("gif.fxtwitter.com")).unwrap();
+			to_upload.push((mime::IMAGE_GIF, filename, url));
+		} else {
+			to_upload.push((video.format.parse().unwrap(), filename, url));
+		}
+	} else if let Some(mosaic) = media.mosaic {
+		to_upload.push((
+			"image/webp".parse().unwrap(),
+			format!("{}_mosaic.webp", tweet.id),
+			mosaic.formats.webp.clone(),
+		));
+	} else if let Some(photos) = media.photos {
+		let filename = photos[0].url.path_segments().unwrap().last().unwrap();
+		let content_type = if filename.ends_with(".jpg") {
+			mime::IMAGE_JPEG
+		} else {
+			format!("image/{}", filename.split('.').last().unwrap()).parse().unwrap()
+		};
+		to_upload.push((content_type, filename.to_string(), photos[0].url.clone()));
 	}
 
-	/*
-	- fetch fxtwitter shit
-	- upload images & embed body
-	- post message in reply
-	*/
+	for (content_type, filename, url) in to_upload {
+		let Ok(response) = HTTP.get(url).send().await else {
+			// TODO:
+			continue;
+		};
+		let Ok(response) = response.error_for_status() else {
+			// TODO:
+			continue;
+		};
+		let Ok(data) = response.bytes().await else {
+			// TODO:
+			continue;
+		};
+
+		// TODO:
+		let _todo = room
+			.send_attachment(filename, &content_type, data.into(), AttachmentConfig::new())
+			.await;
+	}
+
+	Ok(())
 }

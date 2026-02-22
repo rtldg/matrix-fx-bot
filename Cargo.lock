@@ -1933,6 +1933,7 @@ dependencies = [
  "linkify",
  "matrix-sdk",
  "mimalloc",
+ "mime",
  "rand 0.10.0",
  "reqwest 0.13.2",
  "rusqlite",
