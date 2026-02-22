@@ -35,6 +35,7 @@ const TARGETS: &[&str] = &[
 	"fixvx.com",
 	"fxtwitter.com",
 	"hitlerx.com",
+	"nitter.net",
 	"twitter.com",
 	"twittpr.com",
 	"vxtwitter.com",
