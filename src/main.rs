@@ -12,6 +12,7 @@ use matrix_sdk::attachment::AttachmentConfig;
 use matrix_sdk::authentication::matrix::MatrixSession;
 use matrix_sdk::config::SyncSettings;
 use matrix_sdk::ruma::api::client::filter::FilterDefinition;
+use matrix_sdk::ruma::events::room::member::StrippedRoomMemberEvent;
 use matrix_sdk::ruma::events::room::message::MessageType;
 use matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent;
 use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
@@ -211,6 +212,7 @@ async fn run() -> anyhow::Result<()> {
 	}
 
 	matrix_client.add_event_handler(on_room_message);
+	matrix_client.add_event_handler(on_stripped_state_member);
 
 	println!("max_upload_size = {:?}", matrix_client.load_or_fetch_max_upload_size().await?);
 
@@ -219,6 +221,39 @@ async fn run() -> anyhow::Result<()> {
 	// TODO: setup a nice way to exit so your sqlite dbs close cleanly
 
 	Ok(())
+}
+
+async fn on_stripped_state_member(room_member: StrippedRoomMemberEvent, client: matrix_sdk::Client, room: matrix_sdk::Room) {
+	if room_member.state_key != client.user_id().unwrap() {
+		return;
+	}
+
+	if let Some(name) = &room.name() {
+		if name != "fx test" {
+			return;
+		}
+	}
+
+	tokio::spawn(async move {
+		println!("Autojoining room {}", room.room_id());
+		let mut delay = 2;
+
+		while let Err(err) = room.join().await {
+			// retry autojoin due to synapse sending invites, before the
+			// invited user can join for more information see
+			// https://github.com/matrix-org/synapse/issues/4345
+			eprintln!("Failed to join room {} ({err:?}), retrying in {delay}s", room.room_id());
+
+			tokio::time::sleep(Duration::from_secs(delay)).await;
+			delay *= 2;
+
+			if delay > 3600 {
+				eprintln!("Can't join room {} ({err:?})", room.room_id());
+				break;
+			}
+		}
+		println!("Successfully joined room {}", room.room_id());
+	});
 }
 
 async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::Room) {
@@ -242,24 +277,24 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 
 	for link in links {
 		println!("found {link}");
-		post_tweet(&event, &room, link).await;
+		if let Err(e) = post_tweet(&event, &room, link).await {
+			println!("  error: {e:?}");
+		}
 	}
 }
 
 async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Room, mut link: Url) -> anyhow::Result<()> {
 	link.set_host(Some("api.fxtwitter.com")).unwrap();
-	let Ok(response) = HTTP.get(link).send().await else {
-		// TODO:
-		anyhow::bail!("");
-	};
-	let Ok(response) = response.json::<types::FxApiResponse>().await else {
-		// TODO:
-		anyhow::bail!("");
-	};
-	let Some(tweet) = response.tweet else {
-		// TODO:
-		anyhow::bail!("");
-	};
+	let response = HTTP
+		.get(link)
+		.send()
+		.await
+		.context("Failed to fetch api.fxtwitter.com results")?;
+	let response = response
+		.json::<types::FxApiResponse>()
+		.await
+		.context("failed to parse as JSON into FxApiResponse")?;
+	let tweet = response.tweet.context("response.tweet was None")?;
 
 	let textmsg = RoomMessageEventContent::text_plain(format!(
 		"{} (@{})\n{}\n💬{} ♻️{} ❤️{} 👁️{}\n{}",
@@ -272,13 +307,11 @@ async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Ro
 		tweet.views,
 		tweet.created_at
 	));
-	let Ok(_) = room.send(textmsg).await else {
-		// TODO:
-		anyhow::bail!("");
-	};
+	let _ = room.send(textmsg).await.context("Failed to send tweet info")?;
+	println!("  Sent textmsg");
 
 	let Some(media) = tweet.media else {
-		// TODO:
+		println!("  No media");
 		return Ok(());
 	};
 
@@ -313,23 +346,15 @@ async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Ro
 	}
 
 	for (content_type, filename, url) in to_upload {
-		let Ok(response) = HTTP.get(url).send().await else {
-			// TODO:
-			continue;
-		};
-		let Ok(response) = response.error_for_status() else {
-			// TODO:
-			continue;
-		};
-		let Ok(data) = response.bytes().await else {
-			// TODO:
-			continue;
-		};
+		println!("  Trying to fetch {url}");
+		let response = HTTP.get(url.clone()).send().await.context("Failed to GET")?;
+		let response = response.error_for_status().context("Bad status or something")?;
+		let data = response.bytes().await.context("Failed to read entire body")?;
 
-		// TODO:
-		let _todo = room
+		let _ = room
 			.send_attachment(filename, &content_type, data.into(), AttachmentConfig::new())
-			.await;
+			.await
+			.context("Failed to send attachment")?;
 	}
 
 	Ok(())
