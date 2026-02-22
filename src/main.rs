@@ -15,6 +15,19 @@ use rand::Rng;
 use serde::Deserialize;
 use serde::Serialize;
 
+const TARGETS: &[&str] = &[
+	"cunnyx.com",
+	"fixupx.com",
+	"fxtwitter.com",
+	"hitlerx.com",
+	"twitter.com",
+	"twittpr.com",
+	"vxtwitter.com",
+	"x.com",
+	"xcancel.com",
+	"xfixup.com",
+];
+
 #[global_allocator]
 static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -216,10 +229,16 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 	let links: Vec<_> = linkify::LinkFinder::new()
 		.links(&text.body)
 		.filter_map(|l| reqwest::Url::from_str(l.as_str()).ok())
+		.filter(|l| l.scheme() == "https" && l.has_host())
+		.filter(|l| TARGETS.contains(&l.host_str().unwrap().to_ascii_lowercase().as_str()))
+		.filter(|l| l.path().contains("/status/"))
 		.collect();
 
+	for link in links {
+		//
+	}
+
 	/*
-	- find twitter/x/fxtwitter/etc urls in body
 	- fetch fxtwitter shit
 	- upload images & embed body
 	- post message in reply
