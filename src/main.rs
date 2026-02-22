@@ -247,10 +247,12 @@ async fn on_stripped_state_member(room_member: StrippedRoomMemberEvent, client: 
 		return;
 	}
 
-	if let Some(name) = &room.name() {
-		if name != "fx test" {
-			return;
-		}
+	let Some(name) = &room.name() else {
+		return;
+	};
+
+	if name != "fx test" || true {
+		return;
 	}
 
 	tokio::spawn(async move {
@@ -302,12 +304,28 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 		.filter(|l| l.path().contains("/status/"))
 		.collect();
 
+	if links.is_empty() {
+		return;
+	}
+
+	let typer = tokio::spawn({
+		let room = room.clone();
+		async move {
+			loop {
+				let _ = room.typing_notice(true).await;
+				tokio::time::sleep(Duration::from_secs_f32(1.5)).await;
+			}
+		}
+	});
+
 	for link in links {
 		println!("found {link}");
 		if let Err(e) = post_tweet(&event, &room, link).await {
 			println!("  error: {e:?}");
 		}
 	}
+
+	typer.abort();
 }
 
 #[derive(Debug)]
