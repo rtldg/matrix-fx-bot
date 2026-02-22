@@ -1,16 +1,24 @@
+// TODO: Use `matrix_client.http_client`` instead of `HTTP`?
+// TODO: Nice HTML embeds for tweet.
+
 mod types;
 
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::LazyLock;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
 use matrix_sdk::RoomState;
 use matrix_sdk::attachment::AttachmentConfig;
+use matrix_sdk::attachment::BaseImageInfo;
+use matrix_sdk::attachment::BaseVideoInfo;
+use matrix_sdk::attachment::Thumbnail;
 use matrix_sdk::authentication::matrix::MatrixSession;
 use matrix_sdk::config::SyncSettings;
+use matrix_sdk::ruma::OwnedUserId;
 use matrix_sdk::ruma::api::client::filter::FilterDefinition;
 use matrix_sdk::ruma::events::room::member::StrippedRoomMemberEvent;
 use matrix_sdk::ruma::events::room::message::MessageType;
@@ -63,6 +71,7 @@ enum Commands {
 }
 
 static ARGS: LazyLock<Args> = LazyLock::new(Args::parse);
+static MY_USER_ID: OnceLock<OwnedUserId> = OnceLock::new();
 
 /// We read/write this sucker as JSON to a table in the sqlite database.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -211,6 +220,16 @@ async fn run() -> anyhow::Result<()> {
 		sync_settings = sync_settings.token(response.next_batch.clone());
 	}
 
+	/*
+	// TODO: doesn't quite work...
+	let device = matrix_client.encryption().get_own_device().await?.unwrap();
+	if !device.is_verified() {
+		device.verify().await?;
+	}
+	*/
+
+	MY_USER_ID.set(matrix_client.user_id().unwrap().to_owned()).unwrap();
+
 	matrix_client.add_event_handler(on_room_message);
 	matrix_client.add_event_handler(on_stripped_state_member);
 
@@ -235,7 +254,7 @@ async fn on_stripped_state_member(room_member: StrippedRoomMemberEvent, client: 
 	}
 
 	tokio::spawn(async move {
-		println!("Autojoining room {}", room.room_id());
+		println!("Autojoining room {} (invite from {})", room.room_id(), room_member.sender);
 		let mut delay = 2;
 
 		while let Err(err) = room.join().await {
@@ -261,11 +280,19 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 		return;
 	}
 
+	if event.sender.eq(MY_USER_ID.wait()) {
+		return;
+	}
+
 	let MessageType::Text(text) = &event.content.msgtype else {
 		return;
 	};
 
-	println!("{:?}", event);
+	if text.body == "!die" {
+		// TODO:
+	}
+
+	//println!("{:?}", event);
 
 	let links: Vec<_> = linkify::LinkFinder::new()
 		.links(&text.body)
@@ -281,6 +308,17 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 			println!("  error: {e:?}");
 		}
 	}
+}
+
+#[derive(Debug)]
+struct UploadInfo {
+	url: Url,
+	width: Option<u32>,
+	height: Option<u32>,
+	duration: Option<f64>,
+	content_type: mime::Mime,
+	filename: String,
+	thumbnail_url: Option<Url>,
 }
 
 async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Room, mut link: Url) -> anyhow::Result<()> {
@@ -305,7 +343,7 @@ async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Ro
 		tweet.retweets,
 		tweet.likes,
 		tweet.views,
-		tweet.created_at
+		tweet.created_timestamp.strftime("%F %T")
 	));
 	let _ = room.send(textmsg).await.context("Failed to send tweet info")?;
 	println!("  Sent textmsg");
@@ -321,40 +359,127 @@ async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Ro
 	if let Some(videos) = media.videos {
 		let video = &videos[0];
 		let mut url = video.url.clone();
-		url.set_path(&url.path().replace(".mp4", ".gif"));
+		if video.r#type == "gif" {
+			url.set_path(&url.path().replace(".mp4", ".gif"));
+		}
 		let filename = url.path_segments().unwrap().last().unwrap().to_string();
 		if video.r#type == "gif" {
 			url.set_host(Some("gif.fxtwitter.com")).unwrap();
-			to_upload.push((mime::IMAGE_GIF, filename, url));
+			to_upload.push(UploadInfo {
+				url: url,
+				width: None,
+				height: None,
+				duration: None,
+				content_type: mime::IMAGE_GIF,
+				filename: filename,
+				thumbnail_url: None,
+			});
 		} else {
-			to_upload.push((video.format.parse().unwrap(), filename, url));
+			to_upload.push(UploadInfo {
+				url: url,
+				width: Some(video.width),
+				height: Some(video.height),
+				duration: Some(video.duration),
+				content_type: video.format.parse().unwrap(),
+				filename: filename,
+				thumbnail_url: Some(video.thumbnail_url.clone()),
+			});
 		}
 	} else if let Some(mosaic) = media.mosaic {
-		to_upload.push((
-			"image/webp".parse().unwrap(),
-			format!("{}_mosaic.webp", tweet.id),
-			mosaic.formats.webp.clone(),
-		));
+		to_upload.push(UploadInfo {
+			url: mosaic.formats.webp.clone(),
+			width: None,
+			height: None,
+			duration: None,
+			content_type: "image/webp".parse().unwrap(),
+			filename: format!("{}_mosaic.webp", tweet.id),
+			thumbnail_url: None,
+		});
 	} else if let Some(photos) = media.photos {
-		let filename = photos[0].url.path_segments().unwrap().last().unwrap();
+		let photo = &photos[0];
+		let filename = photo.url.path_segments().unwrap().last().unwrap();
 		let content_type = if filename.ends_with(".jpg") {
 			mime::IMAGE_JPEG
 		} else {
 			format!("image/{}", filename.split('.').last().unwrap()).parse().unwrap()
 		};
-		to_upload.push((content_type, filename.to_string(), photos[0].url.clone()));
+		to_upload.push(UploadInfo {
+			url: photo.url.clone(),
+			width: Some(photo.width),
+			height: Some(photo.height),
+			duration: None,
+			content_type: content_type,
+			filename: filename.to_string(),
+			thumbnail_url: None,
+		});
 	}
 
-	for (content_type, filename, url) in to_upload {
-		println!("  Trying to fetch {url}");
-		let response = HTTP.get(url.clone()).send().await.context("Failed to GET")?;
-		let response = response.error_for_status().context("Bad status or something")?;
-		let data = response.bytes().await.context("Failed to read entire body")?;
+	for upload_info in to_upload {
+		println!("  Trying to fetch and upload {}", upload_info.url);
+		let data = HTTP
+			.get(upload_info.url.clone())
+			.send()
+			.await
+			.context("Failed to GET main file")?
+			.error_for_status()
+			.context("Bad status")?
+			.bytes()
+			.await
+			.context("Failed to read entire body of main file")?;
+
+		let mut attachment_config = AttachmentConfig::new();
+		if let Some(thumbnail_url) = upload_info.thumbnail_url {
+			println!("  Fetching thumbnail {thumbnail_url}");
+			let thumbnail_data = HTTP
+				.get(thumbnail_url)
+				.send()
+				.await
+				.context("Failed to GET thumbnail")?
+				.error_for_status()
+				.context("Bad status")?
+				.bytes()
+				.await
+				.context("Failed to read entire body of thumbnail")?;
+			let thumbnail_size = thumbnail_data.len();
+			let thumbnail = Thumbnail {
+				data: thumbnail_data.to_vec(),
+				content_type: mime::IMAGE_JPEG, // should always be truee
+				height: 200u32.into(),          // just fucking lie TODO
+				width: 200u32.into(),           // just fucking lie TODO
+				size: (thumbnail_size as u32).into(),
+			};
+			attachment_config = attachment_config.thumbnail(Some(thumbnail));
+		}
+		if upload_info.duration.is_some() || upload_info.width.is_some() || upload_info.height.is_some() {
+			if upload_info.filename.ends_with(".mp4") {
+				attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Video(BaseVideoInfo {
+					duration: upload_info.duration.map(Duration::from_secs_f64),
+					height: upload_info.height.map(|a| a.into()),
+					width: upload_info.width.map(|a| a.into()),
+					size: Some((data.len() as u32).into()),
+					blurhash: None,
+				}))
+			} else {
+				attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Image(BaseImageInfo {
+					height: upload_info.height.map(|a| a.into()),
+					width: upload_info.width.map(|a| a.into()),
+					size: Some((data.len() as u32).into()),
+					is_animated: None, // TODO:
+					blurhash: None,
+				}))
+			}
+		}
 
 		let _ = room
-			.send_attachment(filename, &content_type, data.into(), AttachmentConfig::new())
+			.send_attachment(
+				upload_info.filename,
+				&upload_info.content_type,
+				data.into(),
+				attachment_config,
+			)
 			.await
 			.context("Failed to send attachment")?;
+		println!("  uploaded {}", upload_info.url);
 	}
 
 	Ok(())

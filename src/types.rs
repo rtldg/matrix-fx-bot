@@ -11,7 +11,7 @@ pub(crate) struct Author {
 }
 #[derive(Serialize, Deserialize)]
 pub(crate) struct VideoFormats {
-	bitrate: Option<i64>,
+	bitrate: Option<u32>,
 	pub codec: Option<String>,
 	pub container: String,
 	pub url: Url,
@@ -20,20 +20,21 @@ pub(crate) struct VideoFormats {
 pub(crate) struct Videos {
 	pub format: String,
 	pub formats: Vec<VideoFormats>,
-	pub height: i64,
+	pub duration: f64,
 	pub id: String,
 	pub thumbnail_url: Url,
 	pub r#type: String,
 	pub url: Url,
-	pub width: i64,
+	pub width: u32,
+	pub height: u32,
 }
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Photos {
 	pub id: String,
 	pub r#type: String,
 	pub url: Url,
-	pub width: i64,
-	pub height: i64,
+	pub width: u32,
+	pub height: u32,
 }
 #[derive(Serialize, Deserialize)]
 pub(crate) struct MosaicFormats {
@@ -55,7 +56,8 @@ pub(crate) struct Media {
 pub(crate) struct Tweet {
 	pub author: Author,
 	pub created_at: String,
-	pub created_timestamp: i64,
+	#[serde(with = "jiff::fmt::serde::timestamp::second::required")]
+	pub created_timestamp: jiff::Timestamp,
 	pub id: String,
 	pub likes: i64,
 	pub media: Option<Media>,
