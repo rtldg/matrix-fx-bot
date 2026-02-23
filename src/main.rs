@@ -268,7 +268,7 @@ async fn run_session_once() -> anyhow::Result<()> {
 	}
 	*/
 
-	MY_USER_ID.set(matrix_client.user_id().unwrap().to_owned()).unwrap();
+	MY_USER_ID.get_or_init(|| matrix_client.user_id().unwrap().to_owned());
 
 	matrix_client.add_event_handler(on_room_message);
 	matrix_client.add_event_handler(on_stripped_state_member);
