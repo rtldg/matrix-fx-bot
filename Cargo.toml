@@ -14,11 +14,12 @@ anyhow = { version = "1", features = ["backtrace"] }
 clap = { version = "4.5.57", features = ["cargo", "derive", "unicode"] }
 jiff = { version = "0.2.20", features = ["serde"] }
 linkify = "0.10.0"
-matrix-sdk = { version = "0.16.0", default-features = false, features = ["e2e-encryption", "bundled-sqlite", "rustls-tls", "socks"] }
+matrix-sdk = { version = "0.16.0", default-features = false, features = ["e2e-encryption", "bundled-sqlite", "native-tls", "socks"] }
 mimalloc = { version = "*", features = ["secure"] }
 mime = "0.3.17"
 rand = "0.10.0"
-reqwest = { version = "*", features = ["gzip", "json", "http2", "socks"] }
+# use same reqwest version until matrix-sdk updates...
+reqwest = { version = "0.12.24", features = ["gzip", "json", "http2", "socks"] }
 rusqlite = "*"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
