@@ -332,6 +332,11 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 		return;
 	}
 
+	if !room.encryption_state().is_encrypted() {
+		// [fx]twitter embeds mostly work in unencrypted rooms so this isn't necessary.
+		return;
+	}
+
 	let MessageType::Text(text) = &event.content.msgtype else {
 		return;
 	};
