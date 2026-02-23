@@ -1,5 +1,6 @@
 // TODO: Use `matrix_client.http_client`` instead of `HTTP`?
 // TODO: Nice HTML embeds for tweet.
+// TODO: pixiv/phixiv
 
 mod types;
 
@@ -28,6 +29,7 @@ use rand::Rng;
 use reqwest::Url;
 use serde::Deserialize;
 use serde::Serialize;
+use signals_but_a_little_nicer::SignalInfo;
 
 const TARGETS: &[&str] = &[
 	"cunnyx.com",
@@ -52,6 +54,8 @@ static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 struct Args {
 	#[arg(long)]
 	database_dir: PathBuf,
+	#[arg(long)]
+	proxy: Option<Url>,
 	#[command(subcommand)]
 	command: Commands,
 }
@@ -117,7 +121,7 @@ impl FxSessionData {
 }
 
 static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
-	reqwest::ClientBuilder::new()
+	let mut builder = reqwest::ClientBuilder::new()
 		.connect_timeout(Duration::from_secs(10))
 		.read_timeout(Duration::from_secs(120))
 		.timeout(Duration::from_secs(140))
@@ -129,9 +133,13 @@ static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
 			env!("CARGO_PKG_REPOSITORY")
 		))
 		*/
-		.user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36")
-		.build()
-		.unwrap()
+		.user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36");
+
+	if let Some(proxy) = &ARGS.proxy {
+		builder = builder.proxy(reqwest::Proxy::all(proxy.clone()).unwrap());
+	}
+
+	builder.build().unwrap()
 });
 
 fn main() -> anyhow::Result<()> {
@@ -139,10 +147,12 @@ fn main() -> anyhow::Result<()> {
 		std::env::set_var("RUST_BACKTRACE", "full");
 	}
 
-	tokio::runtime::Runtime::new()?.block_on(async { tokio::spawn(async_main()).await? })
+	let signal_recv = signals_but_a_little_nicer::get_or_init_receiver().context("failed to setup signal handler")?;
+
+	tokio::runtime::Runtime::new()?.block_on(async { tokio::spawn(async_main(signal_recv)).await? })
 }
 
-async fn async_main() -> anyhow::Result<()> {
+async fn async_main(signal_recv: signals_but_a_little_nicer::SignalReceiver) -> anyhow::Result<()> {
 	match &ARGS.command {
 		Commands::Login {
 			homeserver,
@@ -150,7 +160,7 @@ async fn async_main() -> anyhow::Result<()> {
 			password,
 			login_token,
 		} => login(&homeserver, &username, &password, &login_token).await,
-		Commands::Run => run().await,
+		Commands::Run => run(signal_recv).await,
 	}
 }
 
@@ -202,7 +212,20 @@ async fn login(
 	Ok(())
 }
 
-async fn run() -> anyhow::Result<()> {
+async fn run(mut signal_recv: signals_but_a_little_nicer::SignalReceiver) -> anyhow::Result<()> {
+	tokio::spawn(async move {
+		while let Ok(signal) = signal_recv.recv().await {
+			match signal {
+				SignalInfo::Int | SignalInfo::Quit | SignalInfo::Term => {
+					println!("\nReceived {signal:?}.  Exiting (slowly)");
+					break;
+				},
+				_ => continue,
+			}
+		}
+		let _ = SHOULD_DIE.set(());
+	});
+
 	while let Err(e) = run_session_once().await {
 		println!("{e:?}");
 		println!("Restarting in 10s");
@@ -213,11 +236,15 @@ async fn run() -> anyhow::Result<()> {
 
 async fn run_session_once() -> anyhow::Result<()> {
 	let fx_session_data = FxSessionData::load()?;
-	let matrix_client = matrix_sdk::Client::builder()
+	let mut matrix_client_builder = matrix_sdk::Client::builder()
 		.server_name_or_homeserver_url(&fx_session_data.homeserver)
-		.sqlite_store(&ARGS.database_dir, None)
-		.build()
-		.await?;
+		.sqlite_store(&ARGS.database_dir, None);
+
+	if let Some(proxy) = &ARGS.proxy {
+		matrix_client_builder = matrix_client_builder.proxy(proxy);
+	}
+
+	let matrix_client = matrix_client_builder.build().await?;
 
 	matrix_client.restore_session(fx_session_data.user_session.clone()).await?;
 
