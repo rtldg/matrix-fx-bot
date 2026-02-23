@@ -1,6 +1,6 @@
-// TODO: Use `matrix_client.http_client`` instead of `HTTP`?
-// TODO: Nice HTML embeds for tweet.
-// TODO: pixiv/phixiv
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 rtldg <rtldg@protonmail.com>
+// Copyright ????-???? matrix-rust-sdk contributors
 
 mod types;
 
@@ -81,7 +81,6 @@ static ARGS: LazyLock<Args> = LazyLock::new(Args::parse);
 static MY_USER_ID: OnceLock<OwnedUserId> = OnceLock::new();
 static SHOULD_DIE: OnceLock<()> = OnceLock::new();
 
-/// We read/write this sucker as JSON to a table in the sqlite database.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct FxSessionData {
 	homeserver: String,
@@ -89,6 +88,7 @@ struct FxSessionData {
 }
 
 impl FxSessionData {
+	// TODO: We never persist() after login.  AKA, with new sync tokens and whatnot.  Seems to be fine, so whatever...?
 	fn persist(&self) -> anyhow::Result<()> {
 		let fx_session_data = serde_json::to_string(self)?;
 
@@ -285,11 +285,10 @@ async fn run_session_once() -> anyhow::Result<()> {
 		})
 		.await?;
 
-	// TODO: setup a nice way to exit so your sqlite dbs close cleanly
-
 	Ok(())
 }
 
+// copied from https://github.com/matrix-org/matrix-rust-sdk/blob/4257649933dfe61f44f35efd2de5726c2f24aac7/examples/autojoin/src/main.rs#L8
 async fn on_stripped_state_member(room_member: StrippedRoomMemberEvent, client: matrix_sdk::Client, room: matrix_sdk::Room) {
 	if room_member.state_key != client.user_id().unwrap() {
 		return;
@@ -325,7 +324,7 @@ async fn on_stripped_state_member(room_member: StrippedRoomMemberEvent, client: 
 	});
 }
 
-async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::Room) {
+async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::Room, _client: matrix_sdk::Client) {
 	if room.state() != RoomState::Joined {
 		return;
 	}
@@ -343,15 +342,22 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 		return;
 	};
 
+	if text.body.trim() == "!status" {
+		println!("IKIRU");
+		let content = RoomMessageEventContent::text_plain("IKIRU");
+		let _ = room.send(content).await;
+		return;
+	}
+
 	if text.body == "!die" {
 		let _ = SHOULD_DIE.set(());
 		println!("!die");
 		return;
 	}
 
-	//println!("{:?}", event);
+	// TODO: pixiv/phixiv
 
-	let links: Vec<_> = linkify::LinkFinder::new()
+	let mut links: Vec<_> = linkify::LinkFinder::new()
 		.links(&text.body)
 		.filter_map(|l| Url::from_str(l.as_str()).ok())
 		.filter(|l| l.scheme() == "https" && l.has_host())
@@ -368,10 +374,12 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 		async move {
 			loop {
 				let _ = room.typing_notice(true).await;
-				tokio::time::sleep(Duration::from_secs_f32(1.5)).await;
+				tokio::time::sleep(Duration::from_secs_f32(1.0)).await;
 			}
 		}
 	});
+
+	links.dedup();
 
 	for link in links {
 		println!("found {link}");
@@ -380,7 +388,12 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 		}
 	}
 
-	typer.abort();
+	// keep typing for a tad longer...
+	tokio::spawn(async move {
+		tokio::time::sleep(Duration::from_secs(1)).await;
+		typer.abort();
+		let _ = typer.await;
+	});
 }
 
 #[derive(Debug)]
@@ -407,6 +420,7 @@ async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Ro
 		.context("failed to parse as JSON into FxApiResponse")?;
 	let tweet = response.tweet.context("response.tweet was None")?;
 
+	// TODO: Nice HTML embeds for tweet.
 	let textmsg = RoomMessageEventContent::text_plain(format!(
 		"{} (@{})\n{}\n💬{} ♻️{} ❤️{} 👁️{}\n{}",
 		tweet.author.name,
@@ -537,7 +551,7 @@ async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Ro
 					height: upload_info.height.map(|a| a.into()),
 					width: upload_info.width.map(|a| a.into()),
 					size: Some((data.len() as u32).into()),
-					is_animated: None, // TODO:
+					is_animated: None, // idc
 					blurhash: None,
 				}))
 			}
