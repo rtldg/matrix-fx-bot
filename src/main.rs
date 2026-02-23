@@ -21,6 +21,7 @@ use matrix_sdk::authentication::matrix::MatrixSession;
 use matrix_sdk::config::SyncSettings;
 use matrix_sdk::ruma::OwnedUserId;
 use matrix_sdk::ruma::api::client::filter::FilterDefinition;
+use matrix_sdk::ruma::events::relation::RelationType;
 use matrix_sdk::ruma::events::room::member::StrippedRoomMemberEvent;
 use matrix_sdk::ruma::events::room::message::MessageType;
 use matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent;
@@ -88,7 +89,7 @@ struct FxSessionData {
 }
 
 impl FxSessionData {
-	// We don't have to persist() after login because sync_with_callback()/etc will store tokens for us in matrix_sdk::ClientBuilder::sqlite_store() files
+	// We don't have to persist() after login because sync_with_callback()/sync_once() will store tokens for us in matrix_sdk::ClientBuilder::sqlite_store() files
 	fn persist(&self) -> anyhow::Result<()> {
 		let fx_session_data = serde_json::to_string(self)?;
 
@@ -335,6 +336,14 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 
 	if !room.encryption_state().is_encrypted() {
 		// [fx]twitter embeds mostly work in unencrypted rooms so this isn't necessary.
+		return;
+	}
+
+	if let Some(relates_to) = &event.content.relates_to
+		&& let Some(rel_type) = relates_to.rel_type()
+		&& rel_type == RelationType::Replacement
+	{
+		// skip edited messages
 		return;
 	}
 
