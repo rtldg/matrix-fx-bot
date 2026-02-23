@@ -88,7 +88,7 @@ struct FxSessionData {
 }
 
 impl FxSessionData {
-	// TODO: We never persist() after login.  AKA, with new sync tokens and whatnot.  Seems to be fine, so whatever...?
+	// We don't have to persist() after login because sync_with_callback()/etc will store tokens for us in matrix_sdk::ClientBuilder::sqlite_store() files
 	fn persist(&self) -> anyhow::Result<()> {
 		let fx_session_data = serde_json::to_string(self)?;
 
