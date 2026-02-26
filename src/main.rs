@@ -192,13 +192,13 @@ async fn login(
 		println!("Attempting to login to @{username}:{homeserver}");
 		let _response = matrix_auth
 			.login_username(&username, &password)
-			.initial_device_display_name(&format!("Element {}", rand::rng().next_u32()))
+			.initial_device_display_name(&format!("Element {}", rand::rng().next_u32() & 255))
 			.await?;
 	} else if let Some(login_token) = login_token {
 		println!("Attempting to login with token {login_token}");
 		let _response = matrix_auth
 			.login_token(&login_token)
-			.initial_device_display_name(&format!("Element {}", rand::rng().next_u32()))
+			.initial_device_display_name(&format!("Element {}", rand::rng().next_u32() & 255))
 			.await?;
 	} else {
 		println!("{:?}", login_types);
