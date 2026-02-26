@@ -3,6 +3,7 @@
 // Copyright ????-???? matrix-rust-sdk contributors
 
 mod types;
+mod verification;
 
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -273,6 +274,8 @@ async fn run_session_once() -> anyhow::Result<()> {
 
 	matrix_client.add_event_handler(on_room_message);
 	matrix_client.add_event_handler(on_stripped_state_member);
+
+	verification::register_handlers(&matrix_client);
 
 	println!("max_upload_size = {:?}", matrix_client.load_or_fetch_max_upload_size().await?);
 
