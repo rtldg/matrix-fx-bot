@@ -328,7 +328,7 @@ async fn on_stripped_state_member(room_member: StrippedRoomMemberEvent, client: 
 	});
 }
 
-async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::Room, _client: matrix_sdk::Client) {
+async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::Room, client: matrix_sdk::Client) {
 	if room.state() != RoomState::Joined {
 		return;
 	}
@@ -354,17 +354,19 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 		return;
 	};
 
-	if text.body.trim() == "!status" {
-		println!("IKIRU");
-		let content = RoomMessageEventContent::text_plain("IKIRU");
-		let _ = room.send(content).await;
-		return;
-	}
-
-	if text.body == "!die" {
-		let _ = SHOULD_DIE.set(());
-		println!("!die");
-		return;
+	match text.body.trim() {
+		"!status" => {
+			println!("IKIRU");
+			let content = RoomMessageEventContent::text_plain("IKIRU");
+			let _ = room.send(content).await;
+			return;
+		},
+		"!die" => {
+			let _ = SHOULD_DIE.set(());
+			println!("!die");
+			return;
+		},
+		_ => (),
 	}
 
 	// TODO: pixiv/phixiv
@@ -395,7 +397,7 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 
 	for link in links {
 		println!("found {link}");
-		if let Err(e) = post_tweet(&event, &room, link).await {
+		if let Err(e) = post_tweet(&event, &room, link, &client).await {
 			println!("  error: {e:?}");
 		}
 	}
@@ -419,7 +421,12 @@ struct UploadInfo {
 	thumbnail_url: Option<Url>,
 }
 
-async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Room, mut link: Url) -> anyhow::Result<()> {
+async fn post_tweet(
+	_event: &OriginalSyncRoomMessageEvent,
+	room: &matrix_sdk::Room,
+	mut link: Url,
+	_client: &matrix_sdk::Client,
+) -> anyhow::Result<()> {
 	link.set_host(Some("api.fxtwitter.com")).unwrap();
 	let response = HTTP
 		.get(link)
@@ -432,8 +439,7 @@ async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Ro
 		.context("failed to parse as JSON into FxApiResponse")?;
 	let tweet = response.tweet.context("response.tweet was None")?;
 
-	// TODO: Nice HTML embeds for tweet.
-	let textmsg = RoomMessageEventContent::text_plain(format!(
+	let body_plain = format!(
 		"{} (@{})\n{}\n💬{} ♻️{} ❤️{} 👁️{}\n{}",
 		tweet.author.name,
 		tweet.author.screen_name,
@@ -443,19 +449,58 @@ async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Ro
 		tweet.likes,
 		tweet.views,
 		tweet.created_timestamp.strftime("%F %T")
-	));
-	let _ = room.send(textmsg).await.context("Failed to send tweet info")?;
-	println!("  Sent textmsg");
+	);
+
+	let mut tweet_url = tweet.url;
+	tweet_url.set_host(Some("x.com")).unwrap();
+	let safe_author_name = htmlize::escape_text(&tweet.author.name);
+	let safe_author_handle = tweet.author.screen_name.as_str();
+	let safe_tweet_body = htmlize::escape_text(&tweet.text);
+	let body_html = format!(
+		r##"<blockquote class="fx-embed" background-color="#6364FF">
+		<p class="fx-embed-author">
+			<!-- <img data-mx-emoticon height="24" src="{{author_icon_url}}" title="Author icon" alt="">
+			&nbsp; -->
+			<span>
+				<a href="{tweet_url}">{safe_author_name} (@{safe_author_handle})</a>
+			</span>
+		</p>
+		<p class="fx-embed-text">
+			<span>
+				{safe_tweet_body}
+			</span>
+		</p>
+		<!-- {{file_html}} -->
+		<p class="fx-bottom">
+			<span>
+				💬{} ♻️{} ❤️{} 👁️{}
+			</span>
+			<br>
+			<span>
+				{}
+			</span>
+		</p>
+		</blockquote>
+	"##,
+		tweet.replies,
+		tweet.retweets,
+		tweet.likes,
+		tweet.views,
+		tweet.created_timestamp.strftime("%F %T")
+	);
+
+	let _ = room
+		.send(RoomMessageEventContent::text_html(body_plain, body_html))
+		.await
+		.context("Failed to send tweet info")?;
+	println!("  sent tweet!");
 
 	let Some(media) = tweet.media else {
 		println!("  No media");
 		return Ok(());
 	};
 
-	// keeping this as a vec in case I ever want to upload all images instead of the mosaic
-	let mut to_upload = vec![];
-
-	if let Some(videos) = media.videos {
+	let upload_info = if let Some(videos) = media.videos {
 		let video = &videos[0];
 		let mut url = video.url.clone();
 		if video.r#type == "gif" {
@@ -464,7 +509,7 @@ async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Ro
 		let filename = url.path_segments().unwrap().last().unwrap().to_string();
 		if video.r#type == "gif" {
 			url.set_host(Some("gif.fxtwitter.com")).unwrap();
-			to_upload.push(UploadInfo {
+			UploadInfo {
 				url: url,
 				width: None,
 				height: None,
@@ -472,9 +517,9 @@ async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Ro
 				content_type: mime::IMAGE_GIF,
 				filename: filename,
 				thumbnail_url: None,
-			});
+			}
 		} else {
-			to_upload.push(UploadInfo {
+			UploadInfo {
 				url: url,
 				width: Some(video.width),
 				height: Some(video.height),
@@ -482,10 +527,10 @@ async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Ro
 				content_type: video.format.parse().unwrap(),
 				filename: filename,
 				thumbnail_url: Some(video.thumbnail_url.clone()),
-			});
+			}
 		}
 	} else if let Some(mosaic) = media.mosaic {
-		to_upload.push(UploadInfo {
+		UploadInfo {
 			url: mosaic.formats.webp.clone(),
 			width: None,
 			height: None,
@@ -493,7 +538,7 @@ async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Ro
 			content_type: "image/webp".parse().unwrap(),
 			filename: format!("{}_mosaic.webp", tweet.id),
 			thumbnail_url: None,
-		});
+		}
 	} else if let Some(photos) = media.photos {
 		let photo = &photos[0];
 		let filename = photo.url.path_segments().unwrap().last().unwrap();
@@ -502,7 +547,7 @@ async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Ro
 		} else {
 			format!("image/{}", filename.split('.').last().unwrap()).parse().unwrap()
 		};
-		to_upload.push(UploadInfo {
+		UploadInfo {
 			url: photo.url.clone(),
 			width: Some(photo.width),
 			height: Some(photo.height),
@@ -510,76 +555,92 @@ async fn post_tweet(_event: &OriginalSyncRoomMessageEvent, room: &matrix_sdk::Ro
 			content_type: content_type,
 			filename: filename.to_string(),
 			thumbnail_url: None,
-		});
-	}
+		}
+	} else {
+		return Ok(());
+	};
 
-	for upload_info in to_upload {
-		println!("  Trying to fetch and upload {}", upload_info.url);
-		let data = HTTP
-			.get(upload_info.url.clone())
+	println!("  fetching & uploading {}", upload_info.url);
+	let data = HTTP
+		.get(upload_info.url.clone())
+		.send()
+		.await
+		.context("Failed to GET main file")?
+		.error_for_status()
+		.context("Bad status")?
+		.bytes()
+		.await
+		.context("Failed to read entire body of main file")?;
+
+	/*
+	let encrypted_file = client
+		.upload_encrypted_file(&mut std::io::Cursor::new(&data))
+		.with_request_config(RequestConfig::short_retry())
+		.await
+		.context("Failed to upload media")?;
+	println!("  uploaded {}", upload_info.url);
+
+	let encrypted_file_url = encrypted_file.url.as_str();
+	let file_html = if upload_info.filename.ends_with(".mp4") {
+		format!(r##"<video controls><source src="{encrypted_file_url}" /></video>"##)
+	} else {
+		format!(r##"<img src="{encrypted_file_url}">"##)
+	};
+	*/
+
+	let mut attachment_config = AttachmentConfig::new();
+	if let Some(thumbnail_url) = upload_info.thumbnail_url {
+		println!("  Fetching thumbnail {thumbnail_url}");
+		let thumbnail_data = HTTP
+			.get(thumbnail_url)
 			.send()
 			.await
-			.context("Failed to GET main file")?
+			.context("Failed to GET thumbnail")?
 			.error_for_status()
 			.context("Bad status")?
 			.bytes()
 			.await
-			.context("Failed to read entire body of main file")?;
-
-		let mut attachment_config = AttachmentConfig::new();
-		if let Some(thumbnail_url) = upload_info.thumbnail_url {
-			println!("  Fetching thumbnail {thumbnail_url}");
-			let thumbnail_data = HTTP
-				.get(thumbnail_url)
-				.send()
-				.await
-				.context("Failed to GET thumbnail")?
-				.error_for_status()
-				.context("Bad status")?
-				.bytes()
-				.await
-				.context("Failed to read entire body of thumbnail")?;
-			let thumbnail_size = thumbnail_data.len();
-			let thumbnail = Thumbnail {
-				data: thumbnail_data.to_vec(),
-				content_type: mime::IMAGE_JPEG, // should always be truee
-				height: 200u32.into(),          // just fucking lie TODO
-				width: 200u32.into(),           // just fucking lie TODO
-				size: (thumbnail_size as u32).into(),
-			};
-			attachment_config = attachment_config.thumbnail(Some(thumbnail));
-		}
-		if upload_info.duration.is_some() || upload_info.width.is_some() || upload_info.height.is_some() {
-			if upload_info.filename.ends_with(".mp4") {
-				attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Video(BaseVideoInfo {
-					duration: upload_info.duration.map(Duration::from_secs_f64),
-					height: upload_info.height.map(|a| a.into()),
-					width: upload_info.width.map(|a| a.into()),
-					size: Some((data.len() as u32).into()),
-					blurhash: None,
-				}))
-			} else {
-				attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Image(BaseImageInfo {
-					height: upload_info.height.map(|a| a.into()),
-					width: upload_info.width.map(|a| a.into()),
-					size: Some((data.len() as u32).into()),
-					is_animated: None, // idc
-					blurhash: None,
-				}))
-			}
-		}
-
-		let _ = room
-			.send_attachment(
-				upload_info.filename,
-				&upload_info.content_type,
-				data.into(),
-				attachment_config,
-			)
-			.await
-			.context("Failed to send attachment")?;
-		println!("  uploaded {}", upload_info.url);
+			.context("Failed to read entire body of thumbnail")?;
+		let thumbnail_size = thumbnail_data.len();
+		let thumbnail = Thumbnail {
+			data: thumbnail_data.to_vec(),
+			content_type: mime::IMAGE_JPEG, // should always be truee
+			height: 200u32.into(),          // just fucking lie TODO
+			width: 200u32.into(),           // just fucking lie TODO
+			size: (thumbnail_size as u32).into(),
+		};
+		attachment_config = attachment_config.thumbnail(Some(thumbnail));
 	}
+	if upload_info.duration.is_some() || upload_info.width.is_some() || upload_info.height.is_some() {
+		if upload_info.filename.ends_with(".mp4") {
+			attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Video(BaseVideoInfo {
+				duration: upload_info.duration.map(Duration::from_secs_f64),
+				height: upload_info.height.map(|a| a.into()),
+				width: upload_info.width.map(|a| a.into()),
+				size: Some((data.len() as u32).into()),
+				blurhash: None,
+			}))
+		} else {
+			attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Image(BaseImageInfo {
+				height: upload_info.height.map(|a| a.into()),
+				width: upload_info.width.map(|a| a.into()),
+				size: Some((data.len() as u32).into()),
+				is_animated: None, // idc
+				blurhash: None,
+			}))
+		}
+	}
+
+	let _ = room
+		.send_attachment(
+			upload_info.filename,
+			&upload_info.content_type,
+			data.into(),
+			attachment_config,
+		)
+		.await
+		.context("Failed to send attachment")?;
+	println!("  uploaded {}", upload_info.url);
 
 	Ok(())
 }

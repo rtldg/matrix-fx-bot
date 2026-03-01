@@ -1256,6 +1256,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "htmlize"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d347c0de239be20ba0982e4822de3124404281e119ae3e11f5d7425a414e1935"
+dependencies = [
+ "memchr",
+ "pastey",
+]
+
+[[package]]
 name = "http"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1900,6 +1910,7 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
+ "htmlize",
  "jiff",
  "linkify",
  "matrix-sdk",
@@ -2433,6 +2444,12 @@ dependencies = [
  "smallvec",
  "windows-link",
 ]
+
+[[package]]
+name = "pastey"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35fb2e5f958ec131621fdd531e9fc186ed768cbe395337403ae56c17a74c68ec"
 
 [[package]]
 name = "pbkdf2"

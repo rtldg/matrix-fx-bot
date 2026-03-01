@@ -64,6 +64,7 @@ pub(crate) struct Tweet {
 	pub replies: i64,
 	pub retweets: i64,
 	pub text: String,
+	pub url: Url,
 	pub views: i64,
 }
 #[derive(Serialize, Deserialize)]
