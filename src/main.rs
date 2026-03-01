@@ -60,6 +60,8 @@ struct Args {
 	database_dir: PathBuf,
 	#[arg(long)]
 	proxy: Option<Url>,
+	#[arg(long, short)]
+	invite_pattern_to_accept: Option<String>,
 	#[command(subcommand)]
 	command: Commands,
 }
@@ -302,7 +304,11 @@ async fn on_stripped_state_member(room_member: StrippedRoomMemberEvent, client: 
 		return;
 	};
 
-	if name != "fx test" || true {
+	let Some(invite_pattern_to_join) = &ARGS.invite_pattern_to_accept else {
+		return;
+	};
+
+	if !name.contains(invite_pattern_to_join) {
 		return;
 	}
 
