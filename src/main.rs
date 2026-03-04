@@ -457,7 +457,7 @@ async fn post_tweet(
 		tweet.created_timestamp.strftime("%F %T")
 	);
 
-	let mut tweet_url = tweet.url;
+	let mut tweet_url = tweet.url.clone();
 	tweet_url.set_host(Some("x.com")).unwrap();
 	let safe_author_name = htmlize::escape_text(&tweet.author.name);
 	let safe_author_handle = tweet.author.screen_name.as_str();
@@ -495,12 +495,25 @@ async fn post_tweet(
 		tweet.created_timestamp.strftime("%F %T")
 	);
 
-	let _ = room
-		.send(RoomMessageEventContent::text_html(body_plain, body_html))
-		.await
-		.context("Failed to send tweet info")?;
-	println!("  sent tweet!");
+	let task_tweet = tokio::spawn({
+		let room = room.clone();
+		async move { room.send(RoomMessageEventContent::text_html(body_plain, body_html)).await }
+	});
 
+	let task_media = tokio::spawn({
+		let room = room.clone();
+		async move { fetch_and_post_media(room, tweet).await }
+	});
+
+	let te = task_tweet.await.unwrap().context("Failed to send tweet");
+	let tm = task_media.await.unwrap();
+	te?; // might eat errors from tm if this failed...
+	tm?;
+
+	Ok(())
+}
+
+async fn fetch_and_post_media(room: matrix_sdk::Room, tweet: types::Tweet) -> anyhow::Result<()> {
 	let Some(media) = tweet.media else {
 		println!("  No media");
 		return Ok(());
@@ -566,17 +579,21 @@ async fn post_tweet(
 		return Ok(());
 	};
 
-	println!("  fetching & uploading {}", upload_info.url);
-	let data = HTTP
-		.get(upload_info.url.clone())
-		.send()
-		.await
-		.context("Failed to GET main file")?
-		.error_for_status()
-		.context("Bad status")?
-		.bytes()
-		.await
-		.context("Failed to read entire body of main file")?;
+	let task_data = tokio::spawn({
+		let media_url = upload_info.url.clone();
+		async move {
+			println!("  fetching & uploading {}", media_url);
+			HTTP.get(media_url.clone())
+				.send()
+				.await
+				.context("Failed to GET main file")?
+				.error_for_status()
+				.context("Bad status")?
+				.bytes()
+				.await
+				.context("Failed to read entire body of main file")
+		}
+	});
 
 	/*
 	let encrypted_file = client
@@ -595,28 +612,38 @@ async fn post_tweet(
 	*/
 
 	let mut attachment_config = AttachmentConfig::new();
-	if let Some(thumbnail_url) = upload_info.thumbnail_url {
-		println!("  Fetching thumbnail {thumbnail_url}");
-		let thumbnail_data = HTTP
-			.get(thumbnail_url)
-			.send()
-			.await
-			.context("Failed to GET thumbnail")?
-			.error_for_status()
-			.context("Bad status")?
-			.bytes()
-			.await
-			.context("Failed to read entire body of thumbnail")?;
-		let thumbnail_size = thumbnail_data.len();
-		let thumbnail = Thumbnail {
-			data: thumbnail_data.to_vec(),
-			content_type: mime::IMAGE_JPEG, // should always be truee
-			height: 200u32.into(),          // just fucking lie TODO
-			width: 200u32.into(),           // just fucking lie TODO
-			size: (thumbnail_size as u32).into(),
-		};
-		attachment_config = attachment_config.thumbnail(Some(thumbnail));
-	}
+
+	let task_thumbnail: tokio::task::JoinHandle<anyhow::Result<Option<Thumbnail>>> = tokio::spawn({
+		let thumbnail_url = upload_info.thumbnail_url.clone();
+		async move {
+			if let Some(thumbnail_url) = thumbnail_url {
+				println!("  fetching thumbnail {thumbnail_url}");
+				let thumbnail_data = HTTP
+					.get(thumbnail_url)
+					.send()
+					.await
+					.context("Failed to GET thumbnail")?
+					.error_for_status()
+					.context("Bad status")?
+					.bytes()
+					.await
+					.context("Failed to read entire body of thumbnail")?;
+				let thumbnail_size = thumbnail_data.len();
+				let thumbnail = Thumbnail {
+					data: thumbnail_data.to_vec(),
+					content_type: mime::IMAGE_JPEG, // should always be truee
+					height: 200u32.into(),          // just fucking lie TODO
+					width: 200u32.into(),           // just fucking lie TODO
+					size: (thumbnail_size as u32).into(),
+				};
+				Ok(Some(thumbnail))
+			} else {
+				Ok(None)
+			}
+		}
+	});
+
+	let data = task_data.await.unwrap()?;
 	if upload_info.duration.is_some() || upload_info.width.is_some() || upload_info.height.is_some() {
 		if upload_info.filename.ends_with(".mp4") {
 			attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Video(BaseVideoInfo {
@@ -635,6 +662,16 @@ async fn post_tweet(
 				blurhash: None,
 			}))
 		}
+	}
+
+	match task_thumbnail.await.unwrap() {
+		Ok(Some(thumbnail)) => {
+			attachment_config = attachment_config.thumbnail(Some(thumbnail));
+		},
+		Ok(None) => (),
+		Err(e) => {
+			println!("  failed to fetch thumbnail {}: {e:?}", upload_info.thumbnail_url.unwrap());
+		},
 	}
 
 	let _ = room
