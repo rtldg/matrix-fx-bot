@@ -15,7 +15,17 @@ clap = { version = "4.5.57", features = ["cargo", "derive", "unicode"] }
 htmlize = "1.0.6"
 jiff = { version = "0.2.20", features = ["serde"] }
 linkify = "0.10.0"
-matrix-sdk = { version = "0.16.0", default-features = false, features = ["e2e-encryption", "bundled-sqlite", "native-tls", "socks"] }
+matrix-sdk = {
+	path = "../matrix-rust-sdk/crates/matrix-sdk",
+	#version = "0.16.0",
+	default-features = false,
+	features = [
+		"e2e-encryption",
+		"bundled-sqlite",
+		"native-tls",
+		"socks",
+	]
+}
 mimalloc = { version = "*", features = ["secure"] }
 mime = "0.3.17"
 rand = "0.10.0"
