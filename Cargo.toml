@@ -13,6 +13,7 @@ license = "Apache-2.0"
 anyhow = { version = "1", features = ["backtrace"] }
 clap = { version = "4.5.57", features = ["cargo", "derive", "unicode"] }
 htmlize = "1.0.6"
+itertools = "0.14.0"
 jiff = { version = "0.2.20", features = ["serde"] }
 linkify = "0.10.0"
 matrix-sdk = {

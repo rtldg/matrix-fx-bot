@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
+use itertools::Itertools;
 use matrix_sdk::RoomState;
 use matrix_sdk::attachment::AttachmentConfig;
 use matrix_sdk::attachment::BaseImageInfo;
@@ -434,6 +435,8 @@ async fn post_tweet(
 	_client: &matrix_sdk::Client,
 ) -> anyhow::Result<()> {
 	link.set_host(Some("api.fxtwitter.com")).unwrap();
+	link.set_path(&link.path().split('/').skip(1).take(3).join("/"));
+	println!("{link}");
 	let response = HTTP
 		.get(link)
 		.send()
