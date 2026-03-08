@@ -54,6 +54,12 @@ pub(crate) struct Media {
 }
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Tweet {
+	#[serde(flatten)]
+	pub tweet: TweetInner,
+	pub quote: Option<TweetInner>,
+}
+#[derive(Serialize, Deserialize)]
+pub(crate) struct TweetInner {
 	pub author: Author,
 	pub created_at: String,
 	#[serde(with = "jiff::fmt::serde::timestamp::second::required")]

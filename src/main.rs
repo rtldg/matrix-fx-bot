@@ -446,13 +446,21 @@ async fn post_tweet(
 		.json::<types::FxApiResponse>()
 		.await
 		.context("failed to parse as JSON into FxApiResponse")?;
-	let tweet = response.tweet.context("response.tweet was None")?;
+	let types::Tweet { tweet, quote } = response.tweet.context("response.tweet was None")?;
+
+	let quote_plain = if let Some(quote) = &quote {
+		let t = quote.text.lines().join("\n> ");
+		format!("\n> {} (@{})\n{}", quote.author.name, quote.author.screen_name, t)
+	} else {
+		"".into()
+	};
 
 	let body_plain = format!(
-		"{} (@{})\n{}\n💬{} ♻️{} ❤️{} 👁️{}\n{}",
+		"{} (@{})\n{}{}\n💬{} ♻️{} ❤️{} 👁️{}\n{}",
 		tweet.author.name,
 		tweet.author.screen_name,
 		tweet.text,
+		quote_plain,
 		tweet.replies,
 		tweet.retweets,
 		tweet.likes,
@@ -460,11 +468,37 @@ async fn post_tweet(
 		tweet.created_timestamp.strftime("%F %T")
 	);
 
+	let quote_html = if let Some(quote) = &quote {
+		let mut tweet_url = quote.url.clone();
+		tweet_url.set_host(Some("x.com")).unwrap();
+		let safe_author_name = htmlize::escape_text(&quote.author.name);
+		let safe_author_handle = quote.author.screen_name.as_str();
+		let safe_tweet_body = htmlize::escape_text(&quote.text).lines().join("<br>");
+		format!(
+			r##"<blockquote class="fx-embed-quote" background-color="#6364FF">
+			<p class="fx-embed-quote-author">
+				<!-- <img data-mx-emoticon height="24" src="{{author_icon_url}}" title="Author icon" alt="">
+				&nbsp; -->
+				<span>
+					Quoting <a href="{tweet_url}">{safe_author_name} (@{safe_author_handle})</a>
+				</span>
+			</p>
+			<p class="fx-embed-quote-text">
+				<span>
+					{safe_tweet_body}
+				</span>
+			</p>
+			</blockquote>"##
+		)
+	} else {
+		"".into()
+	};
+
 	let mut tweet_url = tweet.url.clone();
 	tweet_url.set_host(Some("x.com")).unwrap();
 	let safe_author_name = htmlize::escape_text(&tweet.author.name);
 	let safe_author_handle = tweet.author.screen_name.as_str();
-	let safe_tweet_body = htmlize::escape_text(&tweet.text);
+	let safe_tweet_body = htmlize::escape_text(&tweet.text).lines().join("<br>");
 	let body_html = format!(
 		r##"<blockquote class="fx-embed" background-color="#6364FF">
 		<p class="fx-embed-author">
@@ -480,6 +514,7 @@ async fn post_tweet(
 			</span>
 		</p>
 		<!-- {{file_html}} -->
+		{quote_html}
 		<p class="fx-bottom">
 			<span>
 				💬{} ♻️{} ❤️{} 👁️{}
@@ -489,8 +524,7 @@ async fn post_tweet(
 				{}
 			</span>
 		</p>
-		</blockquote>
-	"##,
+		</blockquote>"##,
 		tweet.replies,
 		tweet.retweets,
 		tweet.likes,
@@ -516,7 +550,7 @@ async fn post_tweet(
 	Ok(())
 }
 
-async fn fetch_and_post_media(room: matrix_sdk::Room, tweet: types::Tweet) -> anyhow::Result<()> {
+async fn fetch_and_post_media(room: matrix_sdk::Room, tweet: types::TweetInner) -> anyhow::Result<()> {
 	let Some(media) = tweet.media else {
 		println!("  No media");
 		return Ok(());
