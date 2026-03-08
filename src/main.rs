@@ -369,8 +369,12 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 			return;
 		},
 		"!die" => {
-			let _ = SHOULD_DIE.set(());
-			println!("!die");
+			if let Ok(Some(sender)) = room.get_member(&event.sender).await
+				&& sender.can_kick()
+			{
+				let _ = SHOULD_DIE.set(());
+				println!("!die");
+			}
 			return;
 		},
 		_ => (),
