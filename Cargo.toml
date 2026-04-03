@@ -30,8 +30,7 @@ matrix-sdk = {
 mimalloc = { version = "*", features = ["secure"] }
 mime = "0.3.17"
 rand = "0.10.0"
-# use same reqwest version until matrix-sdk updates...
-reqwest = { version = "0.12.24", features = ["gzip", "json", "http2", "socks"] }
+reqwest = { version = "0.13.1", features = ["gzip", "json", "http2", "socks"] }
 rusqlite = "*"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
