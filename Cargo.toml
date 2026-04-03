@@ -34,5 +34,4 @@ reqwest = { version = "0.13.1", features = ["gzip", "json", "http2", "socks"] }
 rusqlite = "*"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
-signals-but-a-little-nicer = "1.0.0"
 tokio = { version = "1", features = ["full"] }

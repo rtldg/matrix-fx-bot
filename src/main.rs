@@ -32,7 +32,6 @@ use rand::Rng;
 use reqwest::Url;
 use serde::Deserialize;
 use serde::Serialize;
-use signals_but_a_little_nicer::SignalInfo;
 
 const TARGETS: &[&str] = &[
 	"cunnyx.com",
@@ -154,12 +153,10 @@ fn main() -> anyhow::Result<()> {
 		std::env::set_var("RUST_BACKTRACE", "full");
 	}
 
-	let signal_recv = signals_but_a_little_nicer::get_or_init_receiver().context("failed to setup signal handler")?;
-
-	tokio::runtime::Runtime::new()?.block_on(async { tokio::spawn(async_main(signal_recv)).await? })
+	tokio::runtime::Runtime::new()?.block_on(async { tokio::spawn(async_main()).await? })
 }
 
-async fn async_main(signal_recv: signals_but_a_little_nicer::SignalReceiver) -> anyhow::Result<()> {
+async fn async_main() -> anyhow::Result<()> {
 	match &ARGS.command {
 		Commands::Login {
 			homeserver,
@@ -167,7 +164,7 @@ async fn async_main(signal_recv: signals_but_a_little_nicer::SignalReceiver) -> 
 			password,
 			login_token,
 		} => login(&homeserver, &username, &password, &login_token).await,
-		Commands::Run => run(signal_recv).await,
+		Commands::Run => run().await,
 	}
 }
 
@@ -219,20 +216,7 @@ async fn login(
 	Ok(())
 }
 
-async fn run(mut signal_recv: signals_but_a_little_nicer::SignalReceiver) -> anyhow::Result<()> {
-	tokio::spawn(async move {
-		while let Ok(signal) = signal_recv.recv().await {
-			match signal {
-				SignalInfo::Int | SignalInfo::Quit | SignalInfo::Term => {
-					println!("\nReceived {signal:?}.  Exiting (slowly)");
-					break;
-				},
-				_ => continue,
-			}
-		}
-		let _ = SHOULD_DIE.set(());
-	});
-
+async fn run() -> anyhow::Result<()> {
 	while let Err(e) = run_session_once().await {
 		println!("{e:?}");
 		println!("Restarting in 10s");
