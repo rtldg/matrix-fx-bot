@@ -452,7 +452,7 @@ async fn post_tweet(
 		tweet.replies,
 		tweet.retweets,
 		tweet.likes,
-		tweet.views,
+		tweet.views.map(|n| n.to_string()).unwrap_or_else(|| "?".to_string()),
 		tweet.created_timestamp.strftime("%F %T")
 	);
 
@@ -516,7 +516,7 @@ async fn post_tweet(
 		tweet.replies,
 		tweet.retweets,
 		tweet.likes,
-		tweet.views,
+		tweet.views.map(|n| n.to_string()).unwrap_or_else(|| "?".to_string()),
 		tweet.created_timestamp.strftime("%F %T")
 	);
 

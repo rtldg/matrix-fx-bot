@@ -71,7 +71,7 @@ pub(crate) struct TweetInner {
 	pub retweets: i64,
 	pub text: String,
 	pub url: Url,
-	pub views: i64,
+	pub views: Option<i64>,
 }
 #[derive(Serialize, Deserialize)]
 pub(crate) struct FxApiResponse {
