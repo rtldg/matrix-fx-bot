@@ -424,6 +424,7 @@ async fn post_tweet(
 ) -> anyhow::Result<()> {
 	link.set_host(Some("api.fxtwitter.com")).unwrap();
 	link.set_path(&link.path().split('/').skip(1).take(3).join("/"));
+	link.set_query(None);
 	println!("{link}");
 	let response = HTTP
 		.get(link)
