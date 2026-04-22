@@ -152,7 +152,7 @@ static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
 			env!("CARGO_PKG_REPOSITORY")
 		))
 		*/
-		.user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36");
+		.user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36");
 
 	if let Some(proxy) = &ARGS.proxy {
 		builder = builder.proxy(reqwest::Proxy::all(proxy.clone()).unwrap());
