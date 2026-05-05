@@ -29,6 +29,7 @@ mime = "0.3.17"
 rand = "0.10.0"
 reqwest = { version = "0.13.1", features = ["gzip", "json", "http2", "socks"] }
 rusqlite = "*"
+scraper = "0.26.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 tokio = { version = "1", features = ["full"] }

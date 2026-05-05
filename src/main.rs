@@ -3,6 +3,7 @@
 // Copyright ????-???? matrix-rust-sdk contributors
 
 mod bsky;
+mod misskey;
 mod pixiv;
 mod twitter;
 mod verification;
@@ -37,6 +38,7 @@ use serde::Serialize;
 #[derive(PartialEq, Debug)]
 enum Target {
 	Bsky(Url),
+	Misskey(Url),
 	Pixiv(Url),
 	Twitter(Url),
 }
@@ -50,6 +52,8 @@ impl Target {
 			Some(Target::Bsky(url))
 		} else if pixiv::TARGETS.contains(&host.as_str()) {
 			Some(Target::Pixiv(url))
+		} else if misskey::TARGETS.contains(&host.as_str()) && url.path().contains("/notes/") {
+			Some(Target::Misskey(url))
 		} else {
 			None
 		}
@@ -131,12 +135,16 @@ async fn fetch_and_send_media(room: matrix_sdk::Room, media: Vec<Media>) -> anyh
 						.await
 						.context("Failed to read entire body of thumbnail")?;
 					let thumbnail_size = thumbnail_data.len();
-					let (w, h) = imageinfo::ImageInfo::from_raw_data(&thumbnail_data)
-						.map(|info| (info.size.width, info.size.height))
+					let (w, h, content_type) = imageinfo::ImageInfo::from_raw_data(&thumbnail_data)
+						.map(|info| (info.size.width, info.size.height, info.mimetype))
 						.unwrap_or_default();
 					let thumbnail = Thumbnail {
 						data: thumbnail_data.to_vec(),
-						content_type: mime::IMAGE_JPEG, // should always be truee
+						content_type: if content_type.is_empty() {
+							mime::IMAGE_JPEG
+						} else {
+							mime::Mime::from_str(content_type)?
+						},
 						height: (h as u32).into(),
 						width: (w as u32).into(),
 						size: (thumbnail_size as u32).into(),
@@ -182,7 +190,7 @@ async fn fetch_and_send_media(room: matrix_sdk::Room, media: Vec<Media>) -> anyh
 				width: Some((info.size.width as u32).into()),
 				size: Some((data.len() as u32).into()),
 				blurhash: None,
-				is_animated: Some(filename.ends_with(".gif")),
+				is_animated: if filename.ends_with(".gif") { Some(true) } else { None },
 			}));
 			content_type = mime::Mime::from_str(info.mimetype)?;
 		} else {
@@ -551,6 +559,7 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 		println!("found {target:?}");
 		let post = match target {
 			Target::Bsky(url) => bsky::get_post(url).await,
+			Target::Misskey(url) => misskey::get_post(url).await,
 			Target::Pixiv(url) => pixiv::get_post(url).await,
 			Target::Twitter(url) => twitter::get_post(url).await,
 		};

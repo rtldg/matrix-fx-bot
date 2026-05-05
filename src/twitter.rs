@@ -168,7 +168,6 @@ pub(super) async fn get_post(mut url: Url) -> anyhow::Result<crate::Post> {
 	let mut tweet_url = tweet.url.clone();
 	tweet_url.set_host(Some("x.com")).unwrap();
 	let safe_author_name = htmlize::escape_text(&tweet.author.name);
-	let safe_author_handle = tweet.author.screen_name.as_str();
 	let safe_tweet_body = htmlize::escape_text(&tweet.text).lines().join("<br>");
 	// TODO: alt text
 	post.body_html = format!(
@@ -177,7 +176,7 @@ pub(super) async fn get_post(mut url: Url) -> anyhow::Result<crate::Post> {
 			<!-- <img data-mx-emoticon height="24" src="{{author_icon_url}}" title="Author icon" alt="">
 			&nbsp; -->
 			<span>
-				<a href="{tweet_url}">{safe_author_name} (@{safe_author_handle})</a>
+				<a href="{tweet_url}">{safe_author_name} (@{})</a>
 			</span>
 		</p>
 		<p class="fx-embed-text">
@@ -197,6 +196,7 @@ pub(super) async fn get_post(mut url: Url) -> anyhow::Result<crate::Post> {
 			</span>
 		</p>
 		</blockquote>"##,
+		tweet.author.screen_name,
 		tweet.replies,
 		tweet.retweets,
 		tweet.likes,
