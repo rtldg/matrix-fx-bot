@@ -359,7 +359,7 @@ pub(super) async fn get_post(original_url: Url) -> anyhow::Result<crate::Post> {
 		let mut mosaic = original_url.clone();
 		mosaic.set_host(Some("mosaic.xbsky.app")).unwrap();
 		post.media.push(crate::Media {
-			is_video: true,
+			is_video: false,
 			url: mosaic,
 			thumbnail_url: None,
 		});

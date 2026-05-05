@@ -11,14 +11,14 @@ pub(super) const TARGETS: &[&str] = &["misskey.io"];
 
 #[derive(Serialize, Deserialize)]
 struct Properties1 {
-	height: i64,
-	width: i64,
+	height: Option<i64>,
+	width: Option<i64>,
 }
 #[derive(Serialize, Deserialize)]
 struct Files1 {
-	blurhash: String,
+	blurhash: Option<String>,
 	comment: Option<String>,
-	createdAt: String,
+	createdAt: jiff::Timestamp,
 	//folder: (),
 	//folderId: (),
 	id: String,
@@ -46,7 +46,7 @@ struct AvatarDecorations1 {
 struct Emojis1 {}
 #[derive(Serialize, Deserialize)]
 struct User1 {
-	avatarBlurhash: String,
+	avatarBlurhash: Option<String>,
 	avatarDecorations: Vec<AvatarDecorations1>,
 	avatarUrl: Url,
 	//badgeRoles: Vec<()>,

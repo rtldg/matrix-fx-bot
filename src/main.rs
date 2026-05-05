@@ -100,7 +100,7 @@ impl Post {
 
 async fn fetch_and_send_media(room: matrix_sdk::Room, media: Vec<Media>) -> anyhow::Result<()> {
 	for media in media {
-		let filename = media.url.path_segments().unwrap().last().unwrap();
+		let mut filename = media.url.path_segments().unwrap().last().unwrap().to_owned();
 
 		// TODO: grab content-type from this...
 		let task_data = tokio::spawn({
@@ -176,15 +176,18 @@ async fn fetch_and_send_media(room: matrix_sdk::Room, media: Vec<Media>) -> anyh
 		let mut attachment_config = AttachmentConfig::new();
 		let content_type;
 
-		// TODO: fill out attachment_config with info from the imageinfo crate...
-		if filename.ends_with(".mp4") || filename.ends_with(".webm") {
+		if media.is_video {
 			// TODO:
-			content_type = if filename.ends_with(".mp4") {
-				mime::Mime::from_str("video/mp4")?
-			} else {
+			content_type = if filename.ends_with(".webm") {
 				mime::Mime::from_str("video/webm")?
+			} else {
+				mime::Mime::from_str("video/mp4")?
 			};
 		} else if let Ok(info) = imageinfo::ImageInfo::from_raw_data(&data) {
+			if !filename.ends_with(info.ext) {
+				filename.push('.');
+				filename.push_str(info.ext);
+			}
 			attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Image(BaseImageInfo {
 				height: Some((info.size.height as u32).into()),
 				width: Some((info.size.width as u32).into()),
@@ -194,7 +197,7 @@ async fn fetch_and_send_media(room: matrix_sdk::Room, media: Vec<Media>) -> anyh
 			}));
 			content_type = mime::Mime::from_str(info.mimetype)?;
 		} else {
-			// ?????
+			// TODO: ?????
 			continue;
 		}
 
