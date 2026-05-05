@@ -15,7 +15,7 @@ clap = { version = "4.5.57", features = ["cargo", "derive", "unicode"] }
 htmlize = "1.0.6"
 itertools = "0.14.0"
 jiff = { version = "0.2.20", features = ["serde"] }
-linkify = "0.10.0"
+linkify = "0.11.0"
 matrix-sdk = {
 	path = "../matrix-rust-sdk/crates/matrix-sdk",
 	#version = "0.16.0",
@@ -23,7 +23,6 @@ matrix-sdk = {
 	features = [
 		"e2e-encryption",
 		"bundled-sqlite",
-		"native-tls",
 		"socks",
 	]
 }
