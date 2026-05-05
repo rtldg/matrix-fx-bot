@@ -5,16 +5,12 @@ target = "x86_64-unknown-linux-gnu"
 rustflags = [
 	"-Ctarget-cpu=native",
 
-
 	# Yeah, we want frame pointers... (for debugging)
 	"-Cforce-frame-pointers=yes",
 
 	# Faster linking & LTO things...
 	"-Clink-arg=-fuse-ld=mold",
-	"-Clink-arg=-flto",
 	"-Clinker=clang++",
-	"-Clinker-plugin-lto",
-
 
 	# Mostly from https://github.com/EmbarkStudios/rust-ecosystem/blob/main/lints.toml
 	#"-Dunsafe_code",
