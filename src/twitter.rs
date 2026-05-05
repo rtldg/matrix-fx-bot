@@ -1,10 +1,5 @@
-use std::time::Duration;
-
 use anyhow::Context as _;
 use itertools::Itertools;
-use matrix_sdk::attachment::AttachmentConfig;
-use matrix_sdk::attachment::BaseImageInfo;
-use matrix_sdk::attachment::BaseVideoInfo;
 use matrix_sdk::attachment::Thumbnail;
 use matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent;
 use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
@@ -239,7 +234,8 @@ async fn fetch_and_post_media(room: matrix_sdk::Room, tweet: TweetInner) -> anyh
 		return Ok(());
 	};
 
-	let upload_info = if let Some(videos) = media.videos {
+	// TODO: make sure to post ALL videos
+	let mut upload_info = if let Some(videos) = media.videos {
 		let video = &videos[0];
 		let mut url = video.url.clone();
 		if video.r#type == "gif" {
@@ -331,8 +327,6 @@ async fn fetch_and_post_media(room: matrix_sdk::Room, tweet: TweetInner) -> anyh
 	};
 	*/
 
-	let mut attachment_config = AttachmentConfig::new();
-
 	let task_thumbnail: tokio::task::JoinHandle<anyhow::Result<Option<Thumbnail>>> = tokio::spawn({
 		let thumbnail_url = upload_info.thumbnail_url.clone();
 		async move {
@@ -349,11 +343,12 @@ async fn fetch_and_post_media(room: matrix_sdk::Room, tweet: TweetInner) -> anyh
 					.await
 					.context("Failed to read entire body of thumbnail")?;
 				let thumbnail_size = thumbnail_data.len();
+				let (w, h) = crate::get_image_dimensions(&thumbnail_data).unwrap_or((200, 200));
 				let thumbnail = Thumbnail {
 					data: thumbnail_data.to_vec(),
 					content_type: mime::IMAGE_JPEG, // should always be truee
-					height: 200u32.into(),          // just fucking lie TODO
-					width: 200u32.into(),           // just fucking lie TODO
+					height: h.into(),
+					width: w.into(),
 					size: (thumbnail_size as u32).into(),
 				};
 				Ok(Some(thumbnail))
@@ -364,25 +359,7 @@ async fn fetch_and_post_media(room: matrix_sdk::Room, tweet: TweetInner) -> anyh
 	});
 
 	let data = task_data.await.unwrap()?;
-	if upload_info.duration.is_some() || upload_info.width.is_some() || upload_info.height.is_some() {
-		if upload_info.filename.ends_with(".mp4") {
-			attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Video(BaseVideoInfo {
-				duration: upload_info.duration.map(Duration::from_secs_f64),
-				height: upload_info.height.map(|a| a.into()),
-				width: upload_info.width.map(|a| a.into()),
-				size: Some((data.len() as u32).into()),
-				blurhash: None,
-			}))
-		} else {
-			attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Image(BaseImageInfo {
-				height: upload_info.height.map(|a| a.into()),
-				width: upload_info.width.map(|a| a.into()),
-				size: Some((data.len() as u32).into()),
-				is_animated: None, // idc
-				blurhash: None,
-			}))
-		}
-	}
+	let mut attachment_config = upload_info.to_attachment_config(&data);
 
 	match task_thumbnail.await.unwrap() {
 		Ok(Some(thumbnail)) => {

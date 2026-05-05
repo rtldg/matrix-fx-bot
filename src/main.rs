@@ -7,6 +7,7 @@ mod pixiv;
 mod twitter;
 mod verification;
 
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -16,6 +17,9 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::Parser;
 use matrix_sdk::RoomState;
+use matrix_sdk::attachment::AttachmentConfig;
+use matrix_sdk::attachment::BaseImageInfo;
+use matrix_sdk::attachment::BaseVideoInfo;
 use matrix_sdk::authentication::matrix::MatrixSession;
 use matrix_sdk::config::SyncSettings;
 use matrix_sdk::ruma::OwnedUserId;
@@ -61,6 +65,56 @@ struct UploadInfo {
 	content_type: mime::Mime,
 	filename: String,
 	thumbnail_url: Option<Url>,
+}
+
+pub(crate) fn get_image_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+	if let Ok(image) = image::ImageReader::new(Cursor::new(data)).with_guessed_format()
+		&& let Ok((w, h)) = image.into_dimensions()
+	{
+		Some((w, h))
+	} else {
+		None
+	}
+}
+
+impl UploadInfo {
+	pub(crate) fn update(&mut self, data: &[u8]) {
+		if self.filename.ends_with(".mp4") || self.filename.ends_with(".webm") {
+			// TODO:
+		} else {
+			if let Some((w, h)) = get_image_dimensions(data) {
+				self.width = Some(w);
+				self.height = Some(h);
+			}
+		}
+	}
+	pub(crate) fn to_attachment_config(&mut self, data: &[u8]) -> AttachmentConfig {
+		let mut attachment_config = AttachmentConfig::new();
+
+		self.update(data);
+
+		if self.duration.is_some() || self.width.is_some() || self.height.is_some() {
+			if self.filename.ends_with(".mp4") || self.filename.ends_with(".webm") {
+				attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Video(BaseVideoInfo {
+					duration: self.duration.map(Duration::from_secs_f64),
+					height: self.height.map(|a| a.into()),
+					width: self.width.map(|a| a.into()),
+					size: Some((data.len() as u32).into()),
+					blurhash: None,
+				}))
+			} else {
+				attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Image(BaseImageInfo {
+					height: self.height.map(|a| a.into()),
+					width: self.width.map(|a| a.into()),
+					size: Some((data.len() as u32).into()),
+					is_animated: None, // TODO
+					blurhash: None,
+				}))
+			}
+		}
+
+		attachment_config
+	}
 }
 
 #[global_allocator]

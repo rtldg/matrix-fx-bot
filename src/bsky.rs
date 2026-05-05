@@ -1,12 +1,7 @@
 pub(super) const TARGETS: &[&str] = &["bsky.app", "xbsky.app"];
 
-use std::time::Duration;
-
 use anyhow::Context;
 use itertools::Itertools;
-use matrix_sdk::attachment::AttachmentConfig;
-use matrix_sdk::attachment::BaseImageInfo;
-use matrix_sdk::attachment::BaseVideoInfo;
 use matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent;
 use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
 use reqwest::Url;
@@ -394,7 +389,7 @@ async fn fetch_and_post_media(room: matrix_sdk::Room, post: ParsedData, media_ur
 	};
 	let filename = media_url.path_segments().unwrap().last().unwrap().to_owned();
 
-	let upload_info = if post.is_video {
+	let mut upload_info = if post.is_video {
 		UploadInfo {
 			url: media_url.clone(),
 			width: None,    // TODO:
@@ -454,30 +449,8 @@ async fn fetch_and_post_media(room: matrix_sdk::Room, post: ParsedData, media_ur
 	};
 	*/
 
-	let mut attachment_config = AttachmentConfig::new();
-
 	let data = task_data.await.unwrap()?;
-	/*
-	if upload_info.duration.is_some() || upload_info.width.is_some() || upload_info.height.is_some() {
-		if upload_info.filename.ends_with(".mp4") {
-			attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Video(BaseVideoInfo {
-				duration: upload_info.duration.map(Duration::from_secs_f64),
-				height: upload_info.height.map(|a| a.into()),
-				width: upload_info.width.map(|a| a.into()),
-				size: Some((data.len() as u32).into()),
-				blurhash: None,
-			}))
-		} else {
-			attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Image(BaseImageInfo {
-				height: upload_info.height.map(|a| a.into()),
-				width: upload_info.width.map(|a| a.into()),
-				size: Some((data.len() as u32).into()),
-				is_animated: None, // idc
-				blurhash: None,
-			}))
-		}
-	}
-	*/
+	let attachment_config = upload_info.to_attachment_config(&data);
 
 	let _ = room
 		.send_attachment(

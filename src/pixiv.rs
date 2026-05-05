@@ -1,10 +1,5 @@
-use std::time::Duration;
-
 use anyhow::Context;
 use itertools::Itertools;
-use matrix_sdk::attachment::AttachmentConfig;
-use matrix_sdk::attachment::BaseImageInfo;
-use matrix_sdk::attachment::BaseVideoInfo;
 use matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent;
 use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
 use reqwest::Url;
@@ -170,7 +165,7 @@ async fn fetch_and_post_media(room: matrix_sdk::Room, post: PhixivResponse) -> a
 	for media in post.image_proxy_urls.iter().take(media_count) {
 		let filename = media.path_segments().unwrap().last().unwrap().to_owned();
 
-		let upload_info = if media.path().ends_with(".mp4") {
+		let mut upload_info = if media.path().ends_with(".mp4") {
 			UploadInfo {
 				url: media.clone(),
 				width: None,    // TODO:
@@ -229,12 +224,16 @@ async fn fetch_and_post_media(room: matrix_sdk::Room, post: PhixivResponse) -> a
 		};
 		*/
 
+		let data = task_data.await.unwrap()?;
+
+		let attachment_config = upload_info.to_attachment_config(&data);
+
 		let _ = room
 			.send_attachment(
 				upload_info.filename,
 				&upload_info.content_type,
-				task_data.await.unwrap()?.into(),
-				AttachmentConfig::new(),
+				data.into(),
+				attachment_config,
 			)
 			.await
 			.context("Failed to send attachment")?;
