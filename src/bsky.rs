@@ -2,14 +2,11 @@ pub(super) const TARGETS: &[&str] = &["bsky.app", "xbsky.app"];
 
 use anyhow::Context;
 use itertools::Itertools;
-use matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent;
-use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
 use reqwest::Url;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::HTTP;
-use crate::UploadInfo;
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -294,46 +291,34 @@ struct Creator2 {
 	pub avatar: String,
 }
 
-pub(super) async fn post(
-	_event: &OriginalSyncRoomMessageEvent,
-	room: &matrix_sdk::Room,
-	original_url: Url,
-	_client: &matrix_sdk::Client,
-) -> anyhow::Result<()> {
+pub(super) async fn get_post(original_url: Url) -> anyhow::Result<crate::Post> {
+	let mut post = crate::Post::default();
+
 	let mut url = original_url.clone();
 	url.set_host(Some("api.xbsky.app")).unwrap();
 	println!("{url}");
 	let response = HTTP.get(url).send().await.context("Failed to fetch api.xbsky.app results")?;
-	let post = response
+	let bsky = response
 		.json::<BskyRoot>()
 		.await
 		.context("failed to parse as JSON into BskyRoot")?;
-	let post = post.parsed_data;
+	let bsky = bsky.parsed_data;
 
-	let media_url = if !post.video_uri.is_empty() {
-		Some(post.video_uri.clone().parse()?)
-	} else if !post.images.is_empty() {
-		let mut mosaic = original_url.clone();
-		mosaic.set_host(Some("mosaic.xbsky.app")).unwrap();
-		Some(mosaic)
-	} else {
-		None
-	};
-
-	let body_plain = format!(
+	post.body_plain = format!(
 		"{} (@{})\n{}\n💬{} ❤️{}\n{}",
-		post.author.display_name,
-		post.author.handle,
-		post.record.text,
-		post.reply_count + post.quote_count,
-		post.like_count,
-		post.record.created_at.strftime("%F %T")
+		bsky.author.display_name,
+		bsky.author.handle,
+		bsky.record.text,
+		bsky.reply_count + bsky.quote_count,
+		bsky.like_count,
+		bsky.record.created_at.strftime("%F %T")
 	);
 
-	let safe_author_name = htmlize::escape_text(&post.author.display_name);
-	let safe_body = htmlize::escape_text(&post.record.text).lines().join("<br>");
+	let safe_author_name = htmlize::escape_text(&bsky.author.display_name);
+	let safe_body = htmlize::escape_text(&bsky.record.text).lines().join("<br>");
 	// TODO: quotes
-	let body_html = format!(
+	// TODO: alt text
+	post.body_html = format!(
 		r##"<blockquote class="fx-embed" background-color="#6364FF">
 		<p class="fx-embed-author">
 			<!-- <img data-mx-emoticon height="24" src="{{author_icon_url}}" title="Author icon" alt="">
@@ -358,110 +343,27 @@ pub(super) async fn post(
 			</span>
 		</p>
 		</blockquote>"##,
-		post.author.handle,
-		post.reply_count + post.quote_count,
-		post.like_count,
-		post.record.created_at.strftime("%F %T")
+		bsky.author.handle,
+		bsky.reply_count + bsky.quote_count,
+		bsky.like_count,
+		bsky.record.created_at.strftime("%F %T")
 	);
 
-	let task_post = tokio::spawn({
-		let room = room.clone();
-		async move { room.send(RoomMessageEventContent::text_html(body_plain, body_html)).await }
-	});
-
-	let task_media = tokio::spawn({
-		let room = room.clone();
-		async move { fetch_and_post_media(room, post, media_url).await }
-	});
-
-	let te = task_post.await.unwrap().context("Failed to send post");
-	let tm = task_media.await.unwrap();
-	te?; // might eat errors from tm if this failed...
-	tm?;
-
-	Ok(())
-}
-
-async fn fetch_and_post_media(room: matrix_sdk::Room, post: ParsedData, media_url: Option<Url>) -> anyhow::Result<()> {
-	let Some(media_url) = media_url else {
-		println!("  No media");
-		return Ok(());
-	};
-	let filename = media_url.path_segments().unwrap().last().unwrap().to_owned();
-
-	let mut upload_info = if post.is_video {
-		UploadInfo {
-			url: media_url.clone(),
-			width: None,    // TODO:
-			height: None,   // TODO:
-			duration: None, // TODO:
-			content_type: "video/mp4".parse().unwrap(),
-			filename: filename + ".mp4", // TODO: could be webm?
-			thumbnail_url: None,         // TODO:
-		}
-	} else {
-		// TODO: can't resolve until we fetch the stupid media...
-		let content_type = if filename.ends_with(".jpg") || true {
-			mime::IMAGE_JPEG
-		} else {
-			format!("image/{}", filename.split('.').last().unwrap()).parse().unwrap()
-		};
-		UploadInfo {
-			url: media_url.clone(),
-			width: None,  // TODO:
-			height: None, // TODO:
-			duration: None,
-			content_type: content_type,
-			filename: filename + ".jpg", // TODO: could be png, gif, etc...
+	if !bsky.video_uri.is_empty() {
+		post.media.push(crate::Media {
+			is_video: true,
+			url: bsky.video_uri.clone().parse()?,
 			thumbnail_url: None,
-		}
-	};
+		});
+	} else if !bsky.images.is_empty() {
+		let mut mosaic = original_url.clone();
+		mosaic.set_host(Some("mosaic.xbsky.app")).unwrap();
+		post.media.push(crate::Media {
+			is_video: true,
+			url: mosaic,
+			thumbnail_url: None,
+		});
+	}
 
-	let task_data = tokio::spawn({
-		let media_url = upload_info.url.clone();
-		async move {
-			println!("  fetching & uploading {}", media_url);
-			HTTP.get(media_url.clone())
-				.send()
-				.await
-				.context("Failed to GET main file")?
-				.error_for_status()
-				.context("Bad status")?
-				.bytes()
-				.await
-				.context("Failed to read entire body of main file")
-		}
-	});
-
-	/*
-	let encrypted_file = client
-		.upload_encrypted_file(&mut std::io::Cursor::new(&data))
-		.with_request_config(RequestConfig::short_retry())
-		.await
-		.context("Failed to upload media")?;
-	println!("  uploaded {}", upload_info.url);
-
-	let encrypted_file_url = encrypted_file.url.as_str();
-	let file_html = if upload_info.filename.ends_with(".mp4") {
-		format!(r##"<video controls><source src="{encrypted_file_url}" /></video>"##)
-	} else {
-		format!(r##"<img src="{encrypted_file_url}">"##)
-	};
-	*/
-
-	let data = task_data.await.unwrap()?;
-	let attachment_config = upload_info.to_attachment_config(&data);
-
-	let _ = room
-		.send_attachment(
-			upload_info.filename,
-			&upload_info.content_type,
-			data.into(),
-			attachment_config,
-		)
-		.await
-		.context("Failed to send attachment")?;
-	println!("  uploaded {}", upload_info.url);
-
-	Ok(())
+	Ok(post)
 }

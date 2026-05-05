@@ -7,7 +7,6 @@ mod pixiv;
 mod twitter;
 mod verification;
 
-use std::io::Cursor;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::LazyLock;
@@ -20,6 +19,7 @@ use matrix_sdk::RoomState;
 use matrix_sdk::attachment::AttachmentConfig;
 use matrix_sdk::attachment::BaseImageInfo;
 use matrix_sdk::attachment::BaseVideoInfo;
+use matrix_sdk::attachment::Thumbnail;
 use matrix_sdk::authentication::matrix::MatrixSession;
 use matrix_sdk::config::SyncSettings;
 use matrix_sdk::ruma::OwnedUserId;
@@ -56,65 +56,158 @@ impl Target {
 	}
 }
 
-#[derive(Debug)]
-struct UploadInfo {
+#[derive(Debug, Default, Clone)]
+struct Post {
+	body_plain: String,
+	body_html: String,
+	media: Vec<Media>,
+}
+
+#[derive(Debug, Clone)]
+struct Media {
+	is_video: bool,
 	url: Url,
-	width: Option<u32>,
-	height: Option<u32>,
-	duration: Option<f64>,
-	content_type: mime::Mime,
-	filename: String,
 	thumbnail_url: Option<Url>,
 }
 
-pub(crate) fn get_image_dimensions(data: &[u8]) -> Option<(u32, u32)> {
-	if let Ok(image) = image::ImageReader::new(Cursor::new(data)).with_guessed_format()
-		&& let Ok((w, h)) = image.into_dimensions()
-	{
-		Some((w, h))
-	} else {
-		None
+impl Post {
+	async fn send(self, room: &matrix_sdk::Room) -> anyhow::Result<()> {
+		let task_post = tokio::spawn({
+			let room = room.clone();
+			async move {
+				room.send(RoomMessageEventContent::text_html(self.body_plain, self.body_html))
+					.await
+			}
+		});
+
+		let task_media = tokio::spawn({
+			let room = room.clone();
+			async move { fetch_and_send_media(room, self.media).await }
+		});
+
+		let te = task_post.await.unwrap().context("Failed to send post");
+		let tm = task_media.await.unwrap();
+		te?;
+		tm?;
+
+		Ok(())
 	}
 }
 
-impl UploadInfo {
-	pub(crate) fn update(&mut self, data: &[u8]) {
-		if self.filename.ends_with(".mp4") || self.filename.ends_with(".webm") {
-			// TODO:
+async fn fetch_and_send_media(room: matrix_sdk::Room, media: Vec<Media>) -> anyhow::Result<()> {
+	for media in media {
+		let filename = media.url.path_segments().unwrap().last().unwrap();
+
+		// TODO: grab content-type from this...
+		let task_data = tokio::spawn({
+			let media_url = media.url.clone();
+			async move {
+				println!("  fetching & uploading {}", media_url);
+				HTTP.get(media_url.clone())
+					.send()
+					.await
+					.context("Failed to GET main file")?
+					.error_for_status()
+					.context("Bad status")?
+					.bytes()
+					.await
+					.context("Failed to read entire body of main file")
+			}
+		});
+
+		let task_thumbnail: tokio::task::JoinHandle<anyhow::Result<Option<Thumbnail>>> = tokio::spawn({
+			let thumbnail_url = media.thumbnail_url.clone();
+			async move {
+				if let Some(thumbnail_url) = thumbnail_url {
+					println!("  fetching thumbnail {thumbnail_url}");
+					let thumbnail_data = HTTP
+						.get(thumbnail_url)
+						.send()
+						.await
+						.context("Failed to GET thumbnail")?
+						.error_for_status()
+						.context("Bad status")?
+						.bytes()
+						.await
+						.context("Failed to read entire body of thumbnail")?;
+					let thumbnail_size = thumbnail_data.len();
+					let (w, h) = imageinfo::ImageInfo::from_raw_data(&thumbnail_data)
+						.map(|info| (info.size.width, info.size.height))
+						.unwrap_or_default();
+					let thumbnail = Thumbnail {
+						data: thumbnail_data.to_vec(),
+						content_type: mime::IMAGE_JPEG, // should always be truee
+						height: (h as u32).into(),
+						width: (w as u32).into(),
+						size: (thumbnail_size as u32).into(),
+					};
+					Ok(Some(thumbnail))
+				} else {
+					Ok(None)
+				}
+			}
+		});
+
+		/*
+		let encrypted_file = client
+			.upload_encrypted_file(&mut std::io::Cursor::new(&data))
+			.with_request_config(RequestConfig::short_retry())
+			.await
+			.context("Failed to upload media")?;
+		println!("  uploaded {}", upload_info.url);
+
+		let encrypted_file_url = encrypted_file.url.as_str();
+		let file_html = if upload_info.filename.ends_with(".mp4") {
+			format!(r##"<video controls><source src="{encrypted_file_url}" /></video>"##)
 		} else {
-			if let Some((w, h)) = get_image_dimensions(data) {
-				self.width = Some(w);
-				self.height = Some(h);
-			}
-		}
-	}
-	pub(crate) fn to_attachment_config(&mut self, data: &[u8]) -> AttachmentConfig {
+			format!(r##"<img src="{encrypted_file_url}">"##)
+		};
+		*/
+
+		let data = task_data.await.unwrap()?;
 		let mut attachment_config = AttachmentConfig::new();
+		let content_type;
 
-		self.update(data);
-
-		if self.duration.is_some() || self.width.is_some() || self.height.is_some() {
-			if self.filename.ends_with(".mp4") || self.filename.ends_with(".webm") {
-				attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Video(BaseVideoInfo {
-					duration: self.duration.map(Duration::from_secs_f64),
-					height: self.height.map(|a| a.into()),
-					width: self.width.map(|a| a.into()),
-					size: Some((data.len() as u32).into()),
-					blurhash: None,
-				}))
+		// TODO: fill out attachment_config with info from the imageinfo crate...
+		if filename.ends_with(".mp4") || filename.ends_with(".webm") {
+			// TODO:
+			content_type = if filename.ends_with(".mp4") {
+				mime::Mime::from_str("video/mp4")?
 			} else {
-				attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Image(BaseImageInfo {
-					height: self.height.map(|a| a.into()),
-					width: self.width.map(|a| a.into()),
-					size: Some((data.len() as u32).into()),
-					is_animated: None, // TODO
-					blurhash: None,
-				}))
-			}
+				mime::Mime::from_str("video/webm")?
+			};
+		} else if let Ok(info) = imageinfo::ImageInfo::from_raw_data(&data) {
+			attachment_config.info = Some(matrix_sdk::attachment::AttachmentInfo::Image(BaseImageInfo {
+				height: Some((info.size.height as u32).into()),
+				width: Some((info.size.width as u32).into()),
+				size: Some((data.len() as u32).into()),
+				blurhash: None,
+				is_animated: Some(filename.ends_with(".gif")),
+			}));
+			content_type = mime::Mime::from_str(info.mimetype)?;
+		} else {
+			// ?????
+			continue;
 		}
 
-		attachment_config
+		match task_thumbnail.await.unwrap() {
+			Ok(Some(thumbnail)) => {
+				attachment_config = attachment_config.thumbnail(Some(thumbnail));
+			},
+			Ok(None) => (),
+			Err(e) => {
+				println!("  failed to fetch thumbnail {}: {e:?}", media.thumbnail_url.unwrap());
+			},
+		}
+
+		let _ = room
+			.send_attachment(filename, &content_type, data.into(), attachment_config)
+			.await
+			.context("Failed to send attachment")?;
+		println!("  uploaded {}", media.url);
 	}
+
+	Ok(())
 }
 
 #[global_allocator]
@@ -386,7 +479,7 @@ async fn on_stripped_state_member(room_member: StrippedRoomMemberEvent, client: 
 	});
 }
 
-async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::Room, client: matrix_sdk::Client) {
+async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::Room, _client: matrix_sdk::Client) {
 	if room.state() != RoomState::Joined {
 		return;
 	}
@@ -456,12 +549,18 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 
 	for target in targets {
 		println!("found {target:?}");
-		if let Err(e) = match target {
-			Target::Bsky(url) => bsky::post(&event, &room, url, &client).await,
-			Target::Pixiv(url) => pixiv::post(&event, &room, url, &client).await,
-			Target::Twitter(url) => twitter::post(&event, &room, url, &client).await,
-		} {
-			println!("  error: {e:?}");
+		let post = match target {
+			Target::Bsky(url) => bsky::get_post(url).await,
+			Target::Pixiv(url) => pixiv::get_post(url).await,
+			Target::Twitter(url) => twitter::get_post(url).await,
+		};
+		match post {
+			Ok(post) => {
+				if let Err(e) = post.send(&room).await {
+					println!("  error: {e:?}");
+				}
+			},
+			Err(e) => println!("  error: {e:?}"),
 		}
 	}
 

@@ -1,14 +1,10 @@
 use anyhow::Context as _;
 use itertools::Itertools;
-use matrix_sdk::attachment::Thumbnail;
-use matrix_sdk::ruma::events::room::message::OriginalSyncRoomMessageEvent;
-use matrix_sdk::ruma::events::room::message::RoomMessageEventContent;
 use reqwest::Url;
 use serde::Deserialize;
 use serde::Serialize;
 
 use crate::HTTP;
-use crate::UploadInfo;
 
 pub(super) const TARGETS: &[&str] = &[
 	"cunnyx.com",
@@ -105,12 +101,9 @@ pub(crate) struct FxApiResponse {
 	pub tweet: Option<Tweet>,
 }
 
-pub(super) async fn post(
-	_event: &OriginalSyncRoomMessageEvent,
-	room: &matrix_sdk::Room,
-	mut url: Url,
-	_client: &matrix_sdk::Client,
-) -> anyhow::Result<()> {
+pub(super) async fn get_post(mut url: Url) -> anyhow::Result<crate::Post> {
+	let mut post = crate::Post::default();
+
 	url.set_host(Some("api.fxtwitter.com")).unwrap();
 	url.set_path(&url.path().split('/').skip(1).take(3).join("/"));
 	url.set_query(None);
@@ -133,7 +126,7 @@ pub(super) async fn post(
 		"".into()
 	};
 
-	let body_plain = format!(
+	post.body_plain = format!(
 		"{} (@{})\n{}{}\n💬{} ♻️{} ❤️{} 👁️{}\n{}",
 		tweet.author.name,
 		tweet.author.screen_name,
@@ -177,7 +170,8 @@ pub(super) async fn post(
 	let safe_author_name = htmlize::escape_text(&tweet.author.name);
 	let safe_author_handle = tweet.author.screen_name.as_str();
 	let safe_tweet_body = htmlize::escape_text(&tweet.text).lines().join("<br>");
-	let body_html = format!(
+	// TODO: alt text
+	post.body_html = format!(
 		r##"<blockquote class="fx-embed" background-color="#6364FF">
 		<p class="fx-embed-author">
 			<!-- <img data-mx-emoticon height="24" src="{{author_icon_url}}" title="Author icon" alt="">
@@ -210,177 +204,35 @@ pub(super) async fn post(
 		tweet.created_timestamp.strftime("%F %T")
 	);
 
-	let task_tweet = tokio::spawn({
-		let room = room.clone();
-		async move { room.send(RoomMessageEventContent::text_html(body_plain, body_html)).await }
-	});
-
-	let task_media = tokio::spawn({
-		let room = room.clone();
-		async move { fetch_and_post_media(room, tweet).await }
-	});
-
-	let te = task_tweet.await.unwrap().context("Failed to send tweet");
-	let tm = task_media.await.unwrap();
-	te?; // might eat errors from tm if this failed...
-	tm?;
-
-	Ok(())
-}
-
-async fn fetch_and_post_media(room: matrix_sdk::Room, tweet: TweetInner) -> anyhow::Result<()> {
-	let Some(media) = tweet.media else {
-		println!("  No media");
-		return Ok(());
-	};
-
-	// TODO: make sure to post ALL videos
-	let mut upload_info = if let Some(videos) = media.videos {
-		let video = &videos[0];
-		let mut url = video.url.clone();
-		if video.r#type == "gif" {
-			url.set_path(&url.path().replace(".mp4", ".gif"));
-		}
-		let filename = url.path_segments().unwrap().last().unwrap().to_string();
-		if video.r#type == "gif" {
-			url.set_host(Some("gif.fxtwitter.com")).unwrap();
-			UploadInfo {
-				url: url,
-				width: None,
-				height: None,
-				duration: None,
-				content_type: mime::IMAGE_GIF,
-				filename: filename,
-				thumbnail_url: None,
+	if let Some(media) = tweet.media {
+		// TODO: post ALL images and ALL videos...
+		if let Some(videos) = media.videos {
+			let video = &videos[0];
+			let mut url = videos[0].url.clone();
+			if video.r#type == "gif" {
+				url.set_path(&url.path().replace(".mp4", ".gif"));
+				url.set_host(Some("gif.fxtwitter.com")).unwrap();
 			}
-		} else {
-			UploadInfo {
+			post.media.push(crate::Media {
+				is_video: false,
 				url: url,
-				width: Some(video.width),
-				height: Some(video.height),
-				duration: Some(video.duration),
-				content_type: video.format.parse().unwrap(),
-				filename: filename,
 				thumbnail_url: Some(video.thumbnail_url.clone()),
-			}
+			});
+		} else if let Some(mosaic) = media.mosaic {
+			post.media.push(crate::Media {
+				is_video: false,
+				url: mosaic.formats.webp.clone(),
+				thumbnail_url: None,
+			});
+		} else if let Some(photos) = media.photos {
+			let photo = &photos[0];
+			post.media.push(crate::Media {
+				is_video: false,
+				url: photo.url.clone(),
+				thumbnail_url: None,
+			})
 		}
-	} else if let Some(mosaic) = media.mosaic {
-		UploadInfo {
-			url: mosaic.formats.webp.clone(),
-			width: None,
-			height: None,
-			duration: None,
-			content_type: "image/webp".parse().unwrap(),
-			filename: format!("{}_mosaic.webp", tweet.id),
-			thumbnail_url: None,
-		}
-	} else if let Some(photos) = media.photos {
-		let photo = &photos[0];
-		let filename = photo.url.path_segments().unwrap().last().unwrap();
-		let content_type = if filename.ends_with(".jpg") {
-			mime::IMAGE_JPEG
-		} else {
-			format!("image/{}", filename.split('.').last().unwrap()).parse().unwrap()
-		};
-		UploadInfo {
-			url: photo.url.clone(),
-			width: Some(photo.width),
-			height: Some(photo.height),
-			duration: None,
-			content_type: content_type,
-			filename: filename.to_string(),
-			thumbnail_url: None,
-		}
-	} else {
-		return Ok(());
-	};
-
-	let task_data = tokio::spawn({
-		let media_url = upload_info.url.clone();
-		async move {
-			println!("  fetching & uploading {}", media_url);
-			HTTP.get(media_url.clone())
-				.send()
-				.await
-				.context("Failed to GET main file")?
-				.error_for_status()
-				.context("Bad status")?
-				.bytes()
-				.await
-				.context("Failed to read entire body of main file")
-		}
-	});
-
-	/*
-	let encrypted_file = client
-		.upload_encrypted_file(&mut std::io::Cursor::new(&data))
-		.with_request_config(RequestConfig::short_retry())
-		.await
-		.context("Failed to upload media")?;
-	println!("  uploaded {}", upload_info.url);
-
-	let encrypted_file_url = encrypted_file.url.as_str();
-	let file_html = if upload_info.filename.ends_with(".mp4") {
-		format!(r##"<video controls><source src="{encrypted_file_url}" /></video>"##)
-	} else {
-		format!(r##"<img src="{encrypted_file_url}">"##)
-	};
-	*/
-
-	let task_thumbnail: tokio::task::JoinHandle<anyhow::Result<Option<Thumbnail>>> = tokio::spawn({
-		let thumbnail_url = upload_info.thumbnail_url.clone();
-		async move {
-			if let Some(thumbnail_url) = thumbnail_url {
-				println!("  fetching thumbnail {thumbnail_url}");
-				let thumbnail_data = HTTP
-					.get(thumbnail_url)
-					.send()
-					.await
-					.context("Failed to GET thumbnail")?
-					.error_for_status()
-					.context("Bad status")?
-					.bytes()
-					.await
-					.context("Failed to read entire body of thumbnail")?;
-				let thumbnail_size = thumbnail_data.len();
-				let (w, h) = crate::get_image_dimensions(&thumbnail_data).unwrap_or((200, 200));
-				let thumbnail = Thumbnail {
-					data: thumbnail_data.to_vec(),
-					content_type: mime::IMAGE_JPEG, // should always be truee
-					height: h.into(),
-					width: w.into(),
-					size: (thumbnail_size as u32).into(),
-				};
-				Ok(Some(thumbnail))
-			} else {
-				Ok(None)
-			}
-		}
-	});
-
-	let data = task_data.await.unwrap()?;
-	let mut attachment_config = upload_info.to_attachment_config(&data);
-
-	match task_thumbnail.await.unwrap() {
-		Ok(Some(thumbnail)) => {
-			attachment_config = attachment_config.thumbnail(Some(thumbnail));
-		},
-		Ok(None) => (),
-		Err(e) => {
-			println!("  failed to fetch thumbnail {}: {e:?}", upload_info.thumbnail_url.unwrap());
-		},
 	}
 
-	let _ = room
-		.send_attachment(
-			upload_info.filename,
-			&upload_info.content_type,
-			data.into(),
-			attachment_config,
-		)
-		.await
-		.context("Failed to send attachment")?;
-	println!("  uploaded {}", upload_info.url);
-
-	Ok(())
+	Ok(post)
 }
