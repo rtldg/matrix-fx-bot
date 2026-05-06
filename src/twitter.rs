@@ -214,7 +214,7 @@ pub(super) async fn get_post(mut url: Url) -> anyhow::Result<crate::Post> {
 				url.set_host(Some("gif.fxtwitter.com")).unwrap();
 			}
 			post.media.push(crate::Media {
-				is_video: false,
+				is_video: video.r#type != "gif",
 				url: url,
 				thumbnail_url: Some(video.thumbnail_url.clone()),
 			});
