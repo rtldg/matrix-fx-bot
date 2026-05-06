@@ -4,6 +4,7 @@
 
 mod bsky;
 mod misskey;
+mod opengraph;
 mod pixiv;
 mod twitter;
 mod verification;
@@ -12,6 +13,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::LazyLock;
 use std::sync::OnceLock;
+use std::sync::RwLock;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -39,6 +41,7 @@ use serde::Serialize;
 enum Target {
 	Bsky(Url),
 	Misskey(Url),
+	Opengraph(Url),
 	Pixiv(Url),
 	Twitter(Url),
 }
@@ -55,7 +58,11 @@ impl Target {
 		} else if misskey::TARGETS.contains(&host.as_str()) && url.path().contains("/notes/") {
 			Some(Target::Misskey(url))
 		} else {
-			None
+			if OPENGRAPHERS.read().unwrap().contains(&host) {
+				Some(Target::Opengraph(url))
+			} else {
+				None
+			}
 		}
 	}
 }
@@ -319,6 +326,8 @@ static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
 	builder.build().unwrap()
 });
 
+static OPENGRAPHERS: LazyLock<RwLock<Vec<String>>> = LazyLock::new(|| Default::default());
+
 fn main() -> anyhow::Result<()> {
 	unsafe {
 		std::env::set_var("RUST_BACKTRACE", "full");
@@ -516,7 +525,9 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 		return;
 	};
 
-	match text.body.trim() {
+	let (cmd, rest) = text.body.trim().split_once(' ').unwrap_or_default();
+
+	match cmd {
 		"!status" => {
 			println!("IKIRU");
 			let content = RoomMessageEventContent::text_plain("IKIRU");
@@ -529,6 +540,37 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 			{
 				let _ = SHOULD_DIE.set(());
 				println!("!die");
+			}
+			return;
+		},
+		"!opengraph" => {
+			if let Ok(Some(sender)) = room.get_member(&event.sender).await
+				&& sender.can_kick()
+			{
+				let rest = rest.to_lowercase();
+				let added;
+				{
+					let mut og = OPENGRAPHERS.write().unwrap();
+					if let Some(i) = og.iter().position(|v| v.eq(&rest)) {
+						og.swap_remove(i);
+						added = false;
+					} else {
+						og.push(rest.to_owned());
+						added = true;
+					}
+				}
+				let x = tokio::spawn({
+					let og = OPENGRAPHERS.read().unwrap().clone();
+					async move { tokio::fs::write("./session-opengraph.json", serde_json::to_string(&og).unwrap()).await }
+				});
+				let _ = room
+					.send(RoomMessageEventContent::text_plain(if added {
+						format!("added {rest}")
+					} else {
+						format!("removed {rest}")
+					}))
+					.await;
+				let _ = x.await.unwrap();
 			}
 			return;
 		},
@@ -563,6 +605,7 @@ async fn on_room_message(event: OriginalSyncRoomMessageEvent, room: matrix_sdk::
 		let post = match target {
 			Target::Bsky(url) => bsky::get_post(url).await,
 			Target::Misskey(url) => misskey::get_post(url).await,
+			Target::Opengraph(url) => opengraph::get_post(url).await,
 			Target::Pixiv(url) => pixiv::get_post(url).await,
 			Target::Twitter(url) => twitter::get_post(url).await,
 		};
