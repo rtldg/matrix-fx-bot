@@ -32,7 +32,13 @@ pub(super) async fn get_post(url: Url) -> anyhow::Result<crate::Post> {
 		)
 	};
 
-	let title = get_og("og:title")?;
+	let title = get_og("og:title").map(|s| s.to_owned()).unwrap_or_else(|_| {
+		if let Some(title) = page.select(&Selector::parse("title").unwrap()).next() {
+			title.text().next().unwrap_or_default().chars().take(40).collect::<String>()
+		} else {
+			"".into()
+		}
+	});
 	//let ogtype = get_og("og:type")?;
 	let published_time = jiff::Timestamp::from_str(get_og("og:published_time").unwrap_or("2000-01-01T12:34:56Z"))?;
 	let description = get_og("og:description").unwrap_or("");

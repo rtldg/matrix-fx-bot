@@ -406,6 +406,22 @@ async fn run() -> anyhow::Result<()> {
 }
 
 async fn run_session_once() -> anyhow::Result<()> {
+	{
+		let v: Vec<String> = serde_json::from_str(
+			&tokio::fs::read_to_string("./session-opengraph.json")
+				.await
+				.unwrap_or_default(),
+		)
+		.unwrap_or_default();
+		if !v.is_empty() {
+			println!("opengraph sites:");
+			for site in &v {
+				println!("  {site}");
+			}
+		}
+		*OPENGRAPHERS.write().unwrap() = v;
+	}
+
 	let fx_session_data = FxSessionData::load()?;
 	let mut matrix_client_builder = matrix_sdk::Client::builder()
 		.server_name_or_homeserver_url(&fx_session_data.homeserver)
