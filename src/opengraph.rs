@@ -33,7 +33,7 @@ pub(super) async fn get_post(url: Url) -> anyhow::Result<crate::Post> {
 	};
 
 	let title = get_og("og:title")?;
-	let ogtype = get_og("og:type")?;
+	//let ogtype = get_og("og:type")?;
 	let published_time = jiff::Timestamp::from_str(get_og("og:published_time").unwrap_or("2000-01-01T12:34:56Z"))?;
 	let description = get_og("og:description").unwrap_or("");
 
@@ -41,8 +41,6 @@ pub(super) async fn get_post(url: Url) -> anyhow::Result<crate::Post> {
 
 	let safe_title = htmlize::escape_text(title);
 	let safe_body = htmlize::escape_text(description).lines().join("<br>");
-	// TODO: quotes -- with Note1.renote
-	// TODO: alt text -- probably Files1.comment
 	post.body_html = format!(
 		r##"<blockquote class="fx-embed" background-color="#6364FF">
 		<p class="fx-embed-author">
