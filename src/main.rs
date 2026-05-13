@@ -304,7 +304,7 @@ impl FxSessionData {
 	}
 }
 
-static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
+static HTTP: LazyLock<reqwest_middleware::ClientWithMiddleware> = LazyLock::new(|| {
 	let mut builder = reqwest::ClientBuilder::new()
 		.connect_timeout(Duration::from_secs(10))
 		.read_timeout(Duration::from_secs(120))
@@ -323,7 +323,14 @@ static HTTP: LazyLock<reqwest::Client> = LazyLock::new(|| {
 		builder = builder.proxy(reqwest::Proxy::all(proxy.clone()).unwrap());
 	}
 
-	builder.build().unwrap()
+	reqwest_middleware::ClientBuilder::new(builder.build().unwrap())
+		.with(reqwest_retry::RetryTransientMiddleware::new_with_policy(
+			reqwest_retry::policies::ExponentialBackoff::builder()
+				.base(1)
+				.retry_bounds(Duration::from_secs(1), Duration::from_secs(4))
+				.build_with_max_retries(3),
+		))
+		.build()
 });
 
 static OPENGRAPHERS: LazyLock<RwLock<Vec<String>>> = LazyLock::new(|| Default::default());
