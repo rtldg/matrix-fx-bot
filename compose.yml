@@ -1,0 +1,28 @@
+services:
+  warp:
+    image: caomingjun/warp # https://github.com/cmj2002/warp-docker
+    stop_grace_period: 5s
+    restart: always
+    environment:
+      - WARP_SLEEP=2
+    cap_add:
+      # need for vpn tunnel things
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv4.conf.all.src_valid_mark=1
+    volumes:
+      - ./data-warp:/var/lib/cloudflare-warp
+  matrix-fx-bot:
+    build: .
+    #image: ghcr.io/rtldg/matrix-fx-bot:latest
+    network_mode: "service:warp"
+    restart: unless-stopped
+    user: 1000:1000
+    stop_grace_period: 2s
+    volumes:
+      - ./session-opengraph.json:/app/session-opengraph.json
+      - ./session:/app/session
+    cmd: ["./matrix-fx-bot", "--database-dir", "./session", "run"]
